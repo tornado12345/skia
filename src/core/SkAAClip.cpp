@@ -8,7 +8,8 @@
 #include "SkAAClip.h"
 #include "SkAtomics.h"
 #include "SkBlitter.h"
-#include "SkColorPriv.h"
+#include "SkColorData.h"
+#include "SkRectPriv.h"
 #include "SkPath.h"
 #include "SkScan.h"
 #include "SkUtils.h"
@@ -805,7 +806,7 @@ bool SkAAClip::setRegion(const SkRegion& rgn) {
     SkTDArray<uint8_t> xArray;
 
     yArray.setReserve(SkMin32(bounds.height(), 1024));
-    xArray.setReserve(SkMin32(bounds.width() * 128, 64 * 1024));
+    xArray.setReserve(SkMin32(bounds.width(), 512) * 128);
 
     SkRegion::Iterator iter(rgn);
     int prevRight = 0;
@@ -1331,12 +1332,16 @@ public:
             }
 
             // The supersampler's buffer can be the width of the device, so
-            // we may have to trim the run to our bounds. If so, we assert that
-            // the extra spans are always alpha==0
+            // we may have to trim the run to our bounds. Previously, we assert that
+            // the extra spans are always alpha==0.
+            // However, the analytic AA is too sensitive to precision errors
+            // so it may have extra spans with very tiny alpha because after several
+            // arithmatic operations, the edge may bleed the path boundary a little bit.
+            // Therefore, instead of always asserting alpha==0, we assert alpha < 0x10.
             int localX = x;
             int localCount = count;
             if (x < fLeft) {
-                SkASSERT(0 == *alpha);
+                SkASSERT(0x10 > *alpha);
                 int gap = fLeft - x;
                 SkASSERT(gap <= count);
                 localX += gap;
@@ -1344,7 +1349,7 @@ public:
             }
             int right = x + count;
             if (right > fRight) {
-                SkASSERT(0 == *alpha);
+                SkASSERT(0x10 > *alpha);
                 localCount -= right - fRight;
                 SkASSERT(localCount >= 0);
             }
@@ -1378,8 +1383,7 @@ private:
     }
 
     void unexpected() {
-        SkDebugf("---- did not expect to get called here");
-        sk_throw();
+        SK_ABORT("---- did not expect to get called here");
     }
 };
 
@@ -1399,25 +1403,27 @@ bool SkAAClip::setPath(const SkPath& path, const SkRegion* clip, bool doAA) {
         clip = &tmpClip;
     }
 
+    // Since we assert that the BuilderBlitter will never blit outside the intersection
+    // of clip and ibounds, we create this snugClip to be that intersection and send it
+    // to the scan-converter.
+    SkRegion snugClip(*clip);
+
     if (path.isInverseFillType()) {
         ibounds = clip->getBounds();
     } else {
         if (ibounds.isEmpty() || !ibounds.intersect(clip->getBounds())) {
             return this->setEmpty();
         }
+        snugClip.op(ibounds, SkRegion::kIntersect_Op);
     }
 
     Builder        builder(ibounds);
     BuilderBlitter blitter(&builder);
 
     if (doAA) {
-        if (gSkUseAnalyticAA.load()) {
-            SkScan::AAAFillPath(path, *clip, &blitter, true);
-        } else {
-            SkScan::AntiFillPath(path, *clip, &blitter, true);
-        }
+        SkScan::AntiFillPath(path, snugClip, &blitter, true);
     } else {
-        SkScan::FillPath(path, *clip, &blitter);
+        SkScan::FillPath(path, snugClip, &blitter);
     }
 
     blitter.finish();

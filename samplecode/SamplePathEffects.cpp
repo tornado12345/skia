@@ -45,7 +45,7 @@ static sk_sp<SkPathEffect> make_pe(int flags, SkScalar phase) {
 
     auto inner = SkCornerPathEffect::Make(SkIntToScalar(CORNER_RADIUS));
 
-    return SkComposePathEffect::Make(outer, inner);
+    return SkPathEffect::MakeCompose(outer, inner);
 }
 
 static sk_sp<SkPathEffect> make_warp_pe(SkScalar phase) {
@@ -61,27 +61,12 @@ static sk_sp<SkPathEffect> make_warp_pe(SkScalar phase) {
         path, 12, phase, SkPath1DPathEffect::kMorph_Style);
     auto inner = SkCornerPathEffect::Make(SkIntToScalar(CORNER_RADIUS));
 
-    return SkComposePathEffect::Make(outer, inner);
+    return SkPathEffect::MakeCompose(outer, inner);
 }
 
 ///////////////////////////////////////////////////////////
 
 #include "SkColorFilter.h"
-#include "SkLayerRasterizer.h"
-
-class TestRastBuilder : public SkLayerRasterizer::Builder {
-public:
-    TestRastBuilder() {
-        SkPaint paint;
-        paint.setAntiAlias(true);
-
-        paint.setAlpha(0x66);
-        this->addLayer(paint, SkIntToScalar(4), SkIntToScalar(4));
-
-        paint.setAlpha(0xFF);
-        this->addLayer(paint);
-    }
-};
 
 class PathEffectView : public SampleView {
     SkPath  fPath;
@@ -151,8 +136,6 @@ protected:
 
         paint.setARGB(0xFF, 0, 0, 0);
         paint.setPathEffect(make_warp_pe(fPhase));
-        TestRastBuilder testRastBuilder;
-        paint.setRasterizer(testRastBuilder.detach());
         canvas->drawPath(fPath, paint);
     }
 

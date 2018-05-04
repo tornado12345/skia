@@ -26,13 +26,14 @@ public:
 
     bool affectsTransparentBlack() const override;
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
     SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkPaintImageFilter)
 
 protected:
     void flatten(SkWriteBuffer&) const override;
     sk_sp<SkSpecialImage> onFilterImage(SkSpecialImage* source, const Context&,
                                         SkIPoint* offset) const override;
+    sk_sp<SkImageFilter> onMakeColorSpace(SkColorSpaceXformer* xformer) const override;
 
 private:
     SkPaintImageFilter(const SkPaint& paint, const CropRect* rect);

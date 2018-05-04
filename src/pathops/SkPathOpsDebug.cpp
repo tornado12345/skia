@@ -13,7 +13,7 @@
 #include "SkPathOpsDebug.h"
 #include "SkString.h"
 
-#ifdef SK_DEBUG
+#if DEBUG_DUMP_VERIFY
 bool SkPathOpsDebug::gDumpOp;  // set to true to write op to file before a crash
 bool SkPathOpsDebug::gVerifyOp;  // set to true to compare result against regions
 #endif
@@ -42,12 +42,10 @@ int SkPathOpsDebug::gSortCount;
 #endif
 
 #if DEBUG_ACTIVE_OP
-const char* SkPathOpsDebug::kPathOpStr[] = {"diff", "sect", "union", "xor"};
+const char* SkPathOpsDebug::kPathOpStr[] = {"diff", "sect", "union", "xor", "rdiff"};
 #endif
 
 #if defined SK_DEBUG || !FORCE_RELEASE
-
-const char* SkPathOpsDebug::kLVerbStr[] = {"", "line", "quad", "cubic"};
 
 int SkPathOpsDebug::gContourID = 0;
 int SkPathOpsDebug::gSegmentID = 0;
@@ -62,6 +60,10 @@ bool SkPathOpsDebug::ChaseContains(const SkTDArray<SkOpSpanBase* >& chaseArray,
     }
     return false;
 }
+#endif
+ 
+#if DEBUG_ACTIVE_SPANS
+SkString SkPathOpsDebug::gActiveSpans;
 #endif
 
 #if DEBUG_COIN
@@ -324,10 +326,20 @@ void SkOpGlobalState::debugAddToCoinChangedDict() {
 
 void SkPathOpsDebug::ShowActiveSpans(SkOpContourHead* contourList) {
 #if DEBUG_ACTIVE_SPANS
+    SkString str;
     SkOpContour* contour = contourList;
     do {
-        contour->debugShowActiveSpans();
+        contour->debugShowActiveSpans(&str);
     } while ((contour = contour->next()));
+    if (!gActiveSpans.equals(str)) {
+        const char* s = str.c_str();
+        const char* end;
+        while ((end = strchr(s, '\n'))) {
+            SkDebugf("%.*s", end - s + 1, s);
+            s = end + 1;
+        }
+        gActiveSpans.set(str);
+    }
 #endif
 }
 
@@ -358,6 +370,7 @@ void SkPathOpsDebug::CheckHealth(SkOpContourHead* contourList) {
     for (int index = 0; index < kGlitchType_Count; ++index) {
         SkDebugf(mask & (1 << index) ? "x" : "-");
     }
+    SkDebugf(" %s\n", contourList->globalState()->debugCoinDictEntry().fFunctionName);
     for (int index = 0; index < glitches.fGlitches.count(); ++index) {
         const SpanGlitch& glitch = glitches.fGlitches[index];
         SkDebugf("%02d: ", index);
@@ -953,8 +966,8 @@ void SkOpSegment::debugMoveMultiples(SkPathOpsDebug::GlitchLog* glitches) const 
     const SkOpSpanBase* test = &fHead;
     do {
         int addCount = test->spanAddsCount();
-        SkASSERT(addCount >= 1);
-        if (addCount == 1) {
+//        SkASSERT(addCount >= 1);
+        if (addCount <= 1) {
             continue;
         }
         const SkOpPtT* startPtT = test->ptT();
@@ -1074,7 +1087,11 @@ void SkOpSegment::debugMoveNearby(SkPathOpsDebug::GlitchLog* glitches) const {
     spanBase = &fHead;
     do {  // iterate through all spans associated with start
         const SkOpSpanBase* test = spanBase->upCast()->next();
-        if (this->spansNearby(spanBase, test)) {
+        bool found;
+        if (!this->spansNearby(spanBase, test, &found)) {
+            glitches->record(SkPathOpsDebug::kMoveNearbyMergeFinal_Glitch, test);
+        }
+        if (found) {
             if (test->final()) {
                 if (spanBase->prev()) {
                     glitches->record(SkPathOpsDebug::kMoveNearbyMergeFinal_Glitch, test);
@@ -1103,7 +1120,7 @@ void SkOpSegment::debugSetCoinT(int index, SkScalar t) const {
         fDebugBaseMin = SkTMin(t, fDebugBaseMin);
         fDebugBaseMax = SkTMax(t, fDebugBaseMax);
         return;
-    } 
+    }
     SkASSERT(fDebugBaseMin >= t || t >= fDebugBaseMax);
     if (fDebugLastMax < 0 || fDebugLastIndex == index) {
         fDebugLastIndex = index;
@@ -1117,7 +1134,7 @@ void SkOpSegment::debugSetCoinT(int index, SkScalar t) const {
 #endif
 
 #if DEBUG_ACTIVE_SPANS
-void SkOpSegment::debugShowActiveSpans() const {
+void SkOpSegment::debugShowActiveSpans(SkString* str) const {
     debugValidate();
     if (done()) {
         return;
@@ -1134,34 +1151,34 @@ void SkOpSegment::debugShowActiveSpans() const {
         }
         lastId = this->debugID();
         lastT = span->t();
-        SkDebugf("%s id=%d", __FUNCTION__, this->debugID());
+        str->appendf("%s id=%d", __FUNCTION__, this->debugID());
         // since endpoints may have be adjusted, show actual computed curves
         SkDCurve curvePart;
         this->subDivide(span, span->next(), &curvePart);
         const SkDPoint* pts = curvePart.fCubic.fPts;
-        SkDebugf(" (%1.9g,%1.9g", pts[0].fX, pts[0].fY);
+        str->appendf(" (%1.9g,%1.9g", pts[0].fX, pts[0].fY);
         for (int vIndex = 1; vIndex <= SkPathOpsVerbToPoints(fVerb); ++vIndex) {
-            SkDebugf(" %1.9g,%1.9g", pts[vIndex].fX, pts[vIndex].fY);
+            str->appendf(" %1.9g,%1.9g", pts[vIndex].fX, pts[vIndex].fY);
         }
         if (SkPath::kConic_Verb == fVerb) {
-            SkDebugf(" %1.9gf", curvePart.fConic.fWeight);
+            str->appendf(" %1.9gf", curvePart.fConic.fWeight);
         }
-        SkDebugf(") t=%1.9g tEnd=%1.9g", span->t(), span->next()->t());
+        str->appendf(") t=%1.9g tEnd=%1.9g", span->t(), span->next()->t());
         if (span->windSum() == SK_MinS32) {
-            SkDebugf(" windSum=?");
+            str->appendf(" windSum=?");
         } else {
-            SkDebugf(" windSum=%d", span->windSum());
+            str->appendf(" windSum=%d", span->windSum());
         }
         if (span->oppValue() && span->oppSum() == SK_MinS32) {
-            SkDebugf(" oppSum=?");
+            str->appendf(" oppSum=?");
         } else if (span->oppValue() || span->oppSum() != SK_MinS32) {
-            SkDebugf(" oppSum=%d", span->oppSum());
+            str->appendf(" oppSum=%d", span->oppSum());
         }
-        SkDebugf(" windValue=%d", span->windValue());
+        str->appendf(" windValue=%d", span->windValue());
         if (span->oppValue() || span->oppSum() != SK_MinS32) {
-            SkDebugf(" oppValue=%d", span->oppValue());
+            str->appendf(" oppValue=%d", span->oppValue());
         }
-        SkDebugf("\n");
+        str->appendf("\n");
    } while ((span = span->next()->upCastable()));
 }
 #endif
@@ -1619,7 +1636,7 @@ void SkOpCoincidence::debugAddExpanded(SkPathOpsDebug::GlitchLog* log) const {
         const SkOpPtT* oStartPtT = coin->oppPtTStart();
         double priorT = startPtT->fT;
         double oPriorT = oStartPtT->fT;
-        FAIL_IF(startPtT->contains(oStartPtT), coin);
+        FAIL_IF(!startPtT->contains(oStartPtT), coin);
         SkOPASSERT(coin->coinPtTEnd()->contains(coin->oppPtTEnd()));
         const SkOpSpanBase* start = startPtT->span();
         const SkOpSpanBase* oStart = oStartPtT->span();
@@ -1821,8 +1838,8 @@ void SkOpCoincidence::debugAddOrOverlap(SkPathOpsDebug::GlitchLog* log,
     }
     this->debugValidate();
     RETURN_FALSE_IF(csDeleted, coinSeg);
-    RETURN_FALSE_IF(osDeleted, oppSeg); 
-    RETURN_FALSE_IF(ceDeleted, coinSeg); 
+    RETURN_FALSE_IF(osDeleted, oppSeg);
+    RETURN_FALSE_IF(ceDeleted, coinSeg);
     RETURN_FALSE_IF(oeDeleted, oppSeg);
     RETURN_FALSE_IF(!cs || !ce || cs == ce || cs->contains(ce) || !os || !oe || os == oe || os->contains(oe), coinSeg);
     bool result = true;
@@ -2489,7 +2506,7 @@ void SkOpSpanBase::debugMergeMatches(SkPathOpsDebug::GlitchLog* log, const SkOpS
             }
             const SkOpSpanBase* innerBase = inner->span();
             SkASSERT(innerBase->ptT() == inner);
-            // when the intersection is first detected, the span base is marked if there are 
+            // when the intersection is first detected, the span base is marked if there are
             // more than one point in the intersection.
 //            if (!innerBase->hasMultipleHint() && !testBase->hasMultipleHint()) {
                 if (!zero_or_one(inner->fT)) {
@@ -2518,7 +2535,7 @@ void SkOpSpanBase::debugMergeMatches(SkPathOpsDebug::GlitchLog* log, const SkOpS
                     SkOPASSERT(0);
                 }
 #endif
-                break; 
+                break;
 //            }
             break;
         } while ((inner = inner->next()) != innerStop);
@@ -2774,13 +2791,13 @@ const SkOpPtT* SkOpPtT::debugOppPrev(const SkOpPtT* opp) const {
 
 void SkOpPtT::debugResetCoinT() const {
 #if DEBUG_COINCIDENCE_ORDER
-    this->segment()->debugResetCoinT(); 
+    this->segment()->debugResetCoinT();
 #endif
 }
 
 void SkOpPtT::debugSetCoinT(int index) const {
 #if DEBUG_COINCIDENCE_ORDER
-    this->segment()->debugSetCoinT(index, fT); 
+    this->segment()->debugSetCoinT(index, fT);
 #endif
 }
 
@@ -2906,7 +2923,7 @@ void SkPathOpsDebug::ShowOnePath(const SkPath& path, const char* name, bool incl
     showPathContours(iter, name);
 }
 
-#ifdef SK_DEBUG
+#if DEBUG_DUMP_VERIFY
 #include "SkData.h"
 #include "SkStream.h"
 
@@ -3105,3 +3122,12 @@ void SkPathOpsDebug::VerifySimplify(const SkPath& path, const SkPath& result) {
 }
 
 #endif
+
+// global path dumps for msvs Visual Studio 17 to use from Immediate Window
+void Dump(const SkPath& path) {
+    path.dump();
+}
+
+void DumpHex(const SkPath& path) {
+    path.dumpHex();
+}

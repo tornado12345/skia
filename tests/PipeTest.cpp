@@ -18,7 +18,7 @@
 #include "SkPictureRecorder.h"
 
 static void drain(SkPipeDeserializer* deserial, SkDynamicMemoryWStream* stream) {
-    std::unique_ptr<SkCanvas> canvas(SkCreateNullCanvas());
+    std::unique_ptr<SkCanvas> canvas = SkMakeNullCanvas();
     sk_sp<SkData> data = stream->detachAsData();
     deserial->playback(data->data(), data->size(), canvas.get());
 }
@@ -46,7 +46,7 @@ static bool deep_equal(SkImage* a, SkImage* b) {
 }
 
 DEF_TEST(Pipe_image_draw_first, reporter) {
-    sk_sp<SkImage> img = GetResourceAsImage("mandrill_128.png");
+    sk_sp<SkImage> img = GetResourceAsImage("images/mandrill_128.png");
     SkASSERT(img.get());
 
     SkPipeSerializer serializer;
@@ -84,7 +84,7 @@ DEF_TEST(Pipe_image_draw_first, reporter) {
 }
 
 DEF_TEST(Pipe_image_draw_second, reporter) {
-    sk_sp<SkImage> img = GetResourceAsImage("mandrill_128.png");
+    sk_sp<SkImage> img = GetResourceAsImage("images/mandrill_128.png");
     SkASSERT(img.get());
 
     SkPipeSerializer serializer;

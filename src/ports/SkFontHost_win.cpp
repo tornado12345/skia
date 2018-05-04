@@ -6,11 +6,11 @@
  */
 
 #include "SkTypes.h"
-#if defined(SK_BUILD_FOR_WIN32)
+#if defined(SK_BUILD_FOR_WIN)
 
 #include "SkAdvancedTypefaceMetrics.h"
 #include "SkBase64.h"
-#include "SkColorPriv.h"
+#include "SkColorData.h"
 #include "SkData.h"
 #include "SkDescriptor.h"
 #include "SkFontDescriptor.h"
@@ -19,6 +19,8 @@
 #include "SkMakeUnique.h"
 #include "SkMaskGamma.h"
 #include "SkMatrix22.h"
+#include "SkOnce.h"
+#include "SkOTTable_OS_2.h"
 #include "SkOTTable_maxp.h"
 #include "SkOTTable_name.h"
 #include "SkOTUtils.h"
@@ -58,7 +60,7 @@ typedef uint32_t SkGdiRGB;
 // for rotated text, regardless of GDI's notions.
 //#define SK_ENFORCE_ROTATED_TEXT_AA_ON_WINDOWS
 
-static bool isLCD(const SkScalerContext::Rec& rec) {
+static bool isLCD(const SkScalerContextRec& rec) {
     return SkMask::kLCD16_Format == rec.fMaskFormat;
 }
 
@@ -67,13 +69,13 @@ static bool bothZero(SkScalar a, SkScalar b) {
 }
 
 // returns false if there is any non-90-rotation or skew
-static bool isAxisAligned(const SkScalerContext::Rec& rec) {
+static bool isAxisAligned(const SkScalerContextRec& rec) {
     return 0 == rec.fPreSkewX &&
            (bothZero(rec.fPost2x2[0][1], rec.fPost2x2[1][0]) ||
             bothZero(rec.fPost2x2[0][0], rec.fPost2x2[1][1]));
 }
 
-static bool needToRenderWithSkia(const SkScalerContext::Rec& rec) {
+static bool needToRenderWithSkia(const SkScalerContextRec& rec) {
 #ifdef SK_ENFORCE_ROTATED_TEXT_AA_ON_WINDOWS
     // What we really want to catch is when GDI will ignore the AA request and give
     // us BW instead. Smallish rotated text is one heuristic, so this code is just
@@ -259,18 +261,21 @@ protected:
     SkScalerContext* onCreateScalerContext(const SkScalerContextEffects&,
                                            const SkDescriptor*) const override;
     void onFilterRec(SkScalerContextRec*) const override;
-    SkAdvancedTypefaceMetrics* onGetAdvancedTypefaceMetrics(
-                                PerGlyphInfo, const uint32_t*, uint32_t) const override;
+    std::unique_ptr<SkAdvancedTypefaceMetrics> onGetAdvancedMetrics() const override;
     void onGetFontDescriptor(SkFontDescriptor*, bool*) const override;
-    virtual int onCharsToGlyphs(const void* chars, Encoding encoding,
-                                uint16_t glyphs[], int glyphCount) const override;
+    int onCharsToGlyphs(const void* chars, Encoding encoding,
+                        uint16_t glyphs[], int glyphCount) const override;
     int onCountGlyphs() const override;
     int onGetUPEM() const override;
     void onGetFamilyName(SkString* familyName) const override;
     SkTypeface::LocalizedStrings* onCreateFamilyNameIterator() const override;
+    int onGetVariationDesignPosition(SkFontArguments::VariationPosition::Coordinate coordinates[],
+                                     int coordinateCount) const override
+    {
+        return -1;
+    }
     int onGetTableTags(SkFontTableTag tags[]) const override;
-    virtual size_t onGetTableData(SkFontTableTag, size_t offset,
-                                  size_t length, void* data) const override;
+    size_t onGetTableData(SkFontTableTag, size_t offset, size_t length, void* data) const override;
 };
 
 class FontMemResourceTypeface : public LogFontTypeface {
@@ -534,7 +539,7 @@ public:
     SkScalerContext_GDI(sk_sp<LogFontTypeface>,
                         const SkScalerContextEffects&,
                         const SkDescriptor* desc);
-    virtual ~SkScalerContext_GDI();
+    ~SkScalerContext_GDI() override;
 
     // Returns true if the constructor was able to complete all of its
     // initializations (which may include calling GDI).
@@ -546,11 +551,11 @@ protected:
     void generateAdvance(SkGlyph* glyph) override;
     void generateMetrics(SkGlyph* glyph) override;
     void generateImage(const SkGlyph& glyph) override;
-    void generatePath(const SkGlyph& glyph, SkPath* path) override;
+    bool generatePath(SkGlyphID glyph, SkPath* path) override;
     void generateFontMetrics(SkPaint::FontMetrics*) override;
 
 private:
-    DWORD getGDIGlyphPath(const SkGlyph& glyph, UINT flags,
+    DWORD getGDIGlyphPath(SkGlyphID glyph, UINT flags,
                           SkAutoSTMalloc<BUFFERSIZE, uint8_t>* glyphbuf);
 
     HDCOffscreen fOffscreen;
@@ -588,7 +593,7 @@ static inline float FIXED2float(FIXED x) {
     return SkFixedToFloat(SkFIXEDToFixed(x));
 }
 
-static BYTE compute_quality(const SkScalerContext::Rec& rec) {
+static BYTE compute_quality(const SkScalerContextRec& rec) {
     switch (rec.fMaskFormat) {
         case SkMask::kBW_Format:
             return NONANTIALIASED_QUALITY;
@@ -816,13 +821,21 @@ uint16_t SkScalerContext_GDI::generateCharToGlyph(SkUnichar utf32) {
         static const int numWCHAR = 2;
         static const int maxItems = 2;
         // MSDN states that this can be nullptr, but some things don't work then.
-        SCRIPT_CONTROL sc = { 0 };
+        SCRIPT_CONTROL sc;
+        memset(&sc, 0, sizeof(sc));
         // Add extra item to SCRIPT_ITEM to work around a bug (now documented).
         // https://bugzilla.mozilla.org/show_bug.cgi?id=366643
         SCRIPT_ITEM si[maxItems + 1];
         int numItems;
         HRZM(ScriptItemize(utf16, numWCHAR, maxItems, &sc, nullptr, si, &numItems),
              "Could not itemize character.");
+
+        // Disable any attempt at shaping.
+        // Without this ScriptShape may return 0x80040200 (USP_E_SCRIPT_NOT_IN_FONT)
+        // when all that is desired here is a simple cmap lookup.
+        for (SCRIPT_ITEM& item : si) {
+            item.a.eScript = SCRIPT_UNDEFINED;
+        }
 
         // Sometimes ScriptShape cannot find a glyph for a non-BMP and returns 2 space glyphs.
         static const int maxGlyphs = 2;
@@ -930,8 +943,6 @@ void SkScalerContext_GDI::generateMetrics(SkGlyph* glyph) {
     // TODO(benjaminwagner): What is the type of gm.gmCellInc[XY]?
     glyph->fAdvanceX = (float)((int)gm.gmCellIncX);
     glyph->fAdvanceY = (float)((int)gm.gmCellIncY);
-    glyph->fRsbDelta = 0;
-    glyph->fLsbDelta = 0;
 
     if (this->isSubpixel()) {
         sk_bzero(&gm, sizeof(gm));
@@ -1005,7 +1016,7 @@ void SkScalerContext_GDI::generateFontMetrics(SkPaint::FontMetrics* metrics) {
     metrics->fUnderlineThickness = SkIntToScalar(otm.otmsUnderscoreSize);
     metrics->fUnderlinePosition = -SkIntToScalar(otm.otmsUnderscorePosition);
 
-    metrics->fFlags |= SkPaint::FontMetrics::kUnderlineThinknessIsValid_Flag;
+    metrics->fFlags |= SkPaint::FontMetrics::kUnderlineThicknessIsValid_Flag;
     metrics->fFlags |= SkPaint::FontMetrics::kUnderlinePositionIsValid_Flag;
 
     metrics->fXHeight = SkIntToScalar(otm.otmsXHeight);
@@ -1042,24 +1053,11 @@ static void build_power_table(uint8_t table[], float ee) {
  *  that shifting into other color spaces is imprecise.
  */
 static const uint8_t* getInverseGammaTableGDI() {
-    // Since build_power_table is idempotent, many threads can build gTableGdi
-    // simultaneously.
-
-    // Microsoft Specific:
-    // Making gInited volatile provides read-aquire and write-release in vc++.
-    // In VS2012, see compiler option /volatile:(ms|iso).
-    // Replace with C++11 atomics when possible.
-    static volatile bool gInited;
+    static SkOnce once;
     static uint8_t gTableGdi[256];
-    if (gInited) {
-        // Need a L/L (read) barrier (full acquire not needed). If gInited is observed
-        // true then gTableGdi is observable, but it must be requested.
-    } else {
+    once([]{
         build_power_table(gTableGdi, 2.3f);
-        // Need a S/S (write) barrier (full release not needed) here so that this
-        // write to gInited becomes observable after gTableGdi.
-        gInited = true;
-    }
+    });
     return gTableGdi;
 }
 
@@ -1071,33 +1069,20 @@ static const uint8_t* getInverseGammaTableGDI() {
  *  If this value is not specified, the default is a gamma of 1.4.
  */
 static const uint8_t* getInverseGammaTableClearType() {
-    // We don't expect SPI_GETFONTSMOOTHINGCONTRAST to ever change, so building
-    // gTableClearType with build_power_table is effectively idempotent.
-
-    // Microsoft Specific:
-    // Making gInited volatile provides read-aquire and write-release in vc++.
-    // In VS2012, see compiler option /volatile:(ms|iso).
-    // Replace with C++11 atomics when possible.
-    static volatile bool gInited;
+    static SkOnce once;
     static uint8_t gTableClearType[256];
-    if (gInited) {
-        // Need a L/L (read) barrier (acquire not needed). If gInited is observed
-        // true then gTableClearType is observable, but it must be requested.
-    } else {
+    once([]{
         UINT level = 0;
         if (!SystemParametersInfo(SPI_GETFONTSMOOTHINGCONTRAST, 0, &level, 0) || !level) {
             // can't get the data, so use a default
             level = 1400;
         }
         build_power_table(gTableClearType, level / 1000.0f);
-        // Need a S/S (write) barrier (release not needed) here so that this
-        // write to gInited becomes observable after gTableClearType.
-        gInited = true;
-    }
+    });
     return gTableClearType;
 }
 
-#include "SkColorPriv.h"
+#include "SkColorData.h"
 
 //Cannot assume that the input rgb is gray due to possible setting of kGenA8FromLCD_Flag.
 template<bool APPLY_PREBLEND>
@@ -1589,22 +1574,22 @@ static bool sk_path_from_gdi_paths(SkPath* path, const uint8_t* glyphbuf, DWORD 
     return true;
 }
 
-DWORD SkScalerContext_GDI::getGDIGlyphPath(const SkGlyph& glyph, UINT flags,
-                                               SkAutoSTMalloc<BUFFERSIZE, uint8_t>* glyphbuf)
+DWORD SkScalerContext_GDI::getGDIGlyphPath(SkGlyphID glyph, UINT flags,
+                                           SkAutoSTMalloc<BUFFERSIZE, uint8_t>* glyphbuf)
 {
     GLYPHMETRICS gm;
 
-    DWORD total_size = GetGlyphOutlineW(fDDC, glyph.getGlyphID(), flags, &gm, BUFFERSIZE, glyphbuf->get(), &fMat22);
+    DWORD total_size = GetGlyphOutlineW(fDDC, glyph, flags, &gm, BUFFERSIZE, glyphbuf->get(), &fMat22);
     // Sometimes GetGlyphOutlineW returns a number larger than BUFFERSIZE even if BUFFERSIZE > 0.
     // It has been verified that this does not involve a buffer overrun.
     if (GDI_ERROR == total_size || total_size > BUFFERSIZE) {
         // GDI_ERROR because the BUFFERSIZE was too small, or because the data was not accessible.
         // When the data is not accessable GetGlyphOutlineW fails rather quickly,
         // so just try to get the size. If that fails then ensure the data is accessible.
-        total_size = GetGlyphOutlineW(fDDC, glyph.getGlyphID(), flags, &gm, 0, nullptr, &fMat22);
+        total_size = GetGlyphOutlineW(fDDC, glyph, flags, &gm, 0, nullptr, &fMat22);
         if (GDI_ERROR == total_size) {
             LogFontTypeface::EnsureAccessible(this->getTypeface());
-            total_size = GetGlyphOutlineW(fDDC, glyph.getGlyphID(), flags, &gm, 0, nullptr, &fMat22);
+            total_size = GetGlyphOutlineW(fDDC, glyph, flags, &gm, 0, nullptr, &fMat22);
             if (GDI_ERROR == total_size) {
                 // GetGlyphOutlineW is known to fail for some characters, such as spaces.
                 // In these cases, just return that the glyph does not have a shape.
@@ -1614,10 +1599,10 @@ DWORD SkScalerContext_GDI::getGDIGlyphPath(const SkGlyph& glyph, UINT flags,
 
         glyphbuf->reset(total_size);
 
-        DWORD ret = GetGlyphOutlineW(fDDC, glyph.getGlyphID(), flags, &gm, total_size, glyphbuf->get(), &fMat22);
+        DWORD ret = GetGlyphOutlineW(fDDC, glyph, flags, &gm, total_size, glyphbuf->get(), &fMat22);
         if (GDI_ERROR == ret) {
             LogFontTypeface::EnsureAccessible(this->getTypeface());
-            ret = GetGlyphOutlineW(fDDC, glyph.getGlyphID(), flags, &gm, total_size, glyphbuf->get(), &fMat22);
+            ret = GetGlyphOutlineW(fDDC, glyph, flags, &gm, total_size, glyphbuf->get(), &fMat22);
             if (GDI_ERROR == ret) {
                 SkASSERT(false);
                 return 0;
@@ -1627,7 +1612,7 @@ DWORD SkScalerContext_GDI::getGDIGlyphPath(const SkGlyph& glyph, UINT flags,
     return total_size;
 }
 
-void SkScalerContext_GDI::generatePath(const SkGlyph& glyph, SkPath* path) {
+bool SkScalerContext_GDI::generatePath(SkGlyphID glyph, SkPath* path) {
     SkASSERT(path);
     SkASSERT(fDDC);
 
@@ -1649,7 +1634,7 @@ void SkScalerContext_GDI::generatePath(const SkGlyph& glyph, SkPath* path) {
     SkAutoSTMalloc<BUFFERSIZE, uint8_t> glyphbuf(BUFFERSIZE);
     DWORD total_size = getGDIGlyphPath(glyph, format, &glyphbuf);
     if (0 == total_size) {
-        return;
+        return false;
     }
 
     if (fRec.getHinting() != SkPaint::kSlight_Hinting) {
@@ -1661,7 +1646,7 @@ void SkScalerContext_GDI::generatePath(const SkGlyph& glyph, SkPath* path) {
         SkAutoSTMalloc<BUFFERSIZE, uint8_t> hintedGlyphbuf(BUFFERSIZE);
         DWORD hinted_total_size = getGDIGlyphPath(glyph, format, &hintedGlyphbuf);
         if (0 == hinted_total_size) {
-            return;
+            return false;
         }
 
         if (!sk_path_from_gdi_paths(path, glyphbuf, total_size,
@@ -1671,6 +1656,7 @@ void SkScalerContext_GDI::generatePath(const SkGlyph& glyph, SkPath* path) {
             sk_path_from_gdi_path(path, glyphbuf, total_size);
         }
     }
+    return true;
 }
 
 static void logfont_for_name(const char* familyName, LOGFONT* lf) {
@@ -1721,12 +1707,9 @@ void LogFontTypeface::onGetFontDescriptor(SkFontDescriptor* desc,
     *isLocalStream = this->fSerializeAsStream;
 }
 
-SkAdvancedTypefaceMetrics* LogFontTypeface::onGetAdvancedTypefaceMetrics(
-        PerGlyphInfo perGlyphInfo,
-        const uint32_t* glyphIDs,
-        uint32_t glyphIDsCount) const {
+std::unique_ptr<SkAdvancedTypefaceMetrics> LogFontTypeface::onGetAdvancedMetrics() const {
     LOGFONT lf = fLogFont;
-    SkAdvancedTypefaceMetrics* info = nullptr;
+    std::unique_ptr<SkAdvancedTypefaceMetrics> info(nullptr);
 
     HDC hdc = CreateCompatibleDC(nullptr);
     HFONT font = CreateFontIndirect(&lf);
@@ -1756,20 +1739,25 @@ SkAdvancedTypefaceMetrics* LogFontTypeface::onGetAdvancedTypefaceMetrics(
     }
     glyphCount = calculateGlyphCount(hdc, fLogFont);
 
-    info = new SkAdvancedTypefaceMetrics;
-    info->fEmSize = otm.otmEMSquare;
-    info->fLastGlyphID = SkToU16(glyphCount - 1);
+    info.reset(new SkAdvancedTypefaceMetrics);
     tchar_to_skstring(lf.lfFaceName, &info->fFontName);
-    // If bit 1 is set, the font may not be embedded in a document.
-    // If bit 1 is clear, the font can be embedded.
-    // If bit 2 is set, the embedding is read-only.
-    if (otm.otmfsType & 0x1) {
-        info->fFlags |= SkAdvancedTypefaceMetrics::kNotEmbeddable_FontFlag;
+
+    SkOTTableOS2_V4::Type fsType;
+    if (sizeof(fsType) == this->getTableData(SkTEndian_SwapBE32(SkOTTableOS2::TAG),
+                                             offsetof(SkOTTableOS2_V4, fsType),
+                                             sizeof(fsType),
+                                             &fsType)) {
+        SkOTUtils::SetAdvancedTypefaceFlags(fsType, info.get());
+    } else {
+        // If bit 1 is set, the font may not be embedded in a document.
+        // If bit 1 is clear, the font can be embedded.
+        // If bit 2 is set, the embedding is read-only.
+        if (otm.otmfsType & 0x1) {
+            info->fFlags |= SkAdvancedTypefaceMetrics::kNotEmbeddable_FontFlag;
+        }
     }
 
-    if (perGlyphInfo & kToUnicode_PerGlyphInfo) {
-        populate_glyph_to_unicode(hdc, glyphCount, &(info->fGlyphToUnicode));
-    }
+    populate_glyph_to_unicode(hdc, glyphCount, &(info->fGlyphToUnicode));
 
     if (glyphCount > 0 &&
         (otm.otmTextMetrics.tmPitchAndFamily & TMPF_TRUETYPE)) {
@@ -1898,7 +1886,7 @@ static HANDLE activate_font(SkData* fontData) {
 }
 
 // Does not affect ownership of stream.
-static SkTypeface* create_from_stream(SkStreamAsset* stream) {
+static sk_sp<SkTypeface> create_from_stream(std::unique_ptr<SkStreamAsset> stream) {
     // Create a unique and unpredictable font name.
     // Avoids collisions and access from CSS.
     char familyName[BASE64_GUID_ID_LEN];
@@ -1908,7 +1896,7 @@ static SkTypeface* create_from_stream(SkStreamAsset* stream) {
     }
 
     // Change the name of the font.
-    sk_sp<SkData> rewrittenFontData(SkOTUtils::RenameFont(stream, familyName, familyNameSize-1));
+    sk_sp<SkData> rewrittenFontData(SkOTUtils::RenameFont(stream.get(), familyName, familyNameSize-1));
     if (nullptr == rewrittenFontData.get()) {
         return nullptr;
     }
@@ -1923,7 +1911,7 @@ static SkTypeface* create_from_stream(SkStreamAsset* stream) {
     LOGFONT lf;
     logfont_for_name(familyName, &lf);
 
-    return SkCreateFontMemResourceTypefaceFromLOGFONT(lf, fontReference);
+    return sk_sp<SkTypeface>(SkCreateFontMemResourceTypefaceFromLOGFONT(lf, fontReference));
 }
 
 SkStreamAsset* LogFontTypeface::onOpenStream(int* ttcIndex) const {
@@ -1939,7 +1927,7 @@ SkStreamAsset* LogFontTypeface::onOpenStream(int* ttcIndex) const {
 
     SkMemoryStream* stream = nullptr;
     DWORD tables[2] = {kTTCTag, 0};
-    for (int i = 0; i < SK_ARRAY_COUNT(tables); i++) {
+    for (size_t i = 0; i < SK_ARRAY_COUNT(tables); i++) {
         DWORD bufferSize = GetFontData(hdc, tables[i], 0, nullptr, 0);
         if (bufferSize == GDI_ERROR) {
             call_ensure_accessible(lf);
@@ -1995,7 +1983,8 @@ static uint16_t nonBmpCharToGlyph(HDC hdc, SCRIPT_CACHE* scriptCache, const WCHA
     static const int numWCHAR = 2;
     static const int maxItems = 2;
     // MSDN states that this can be nullptr, but some things don't work then.
-    SCRIPT_CONTROL scriptControl = { 0 };
+    SCRIPT_CONTROL scriptControl;
+    memset(&scriptControl, 0, sizeof(scriptControl));
     // Add extra item to SCRIPT_ITEM to work around a bug (now documented).
     // https://bugzilla.mozilla.org/show_bug.cgi?id=366643
     SCRIPT_ITEM si[maxItems + 1];
@@ -2067,7 +2056,7 @@ int LogFontTypeface::onCharsToGlyphs(const void* chars, Encoding encoding,
         WCHAR scratch[scratchCount];
         int glyphIndex = 0;
         const char* currentUtf8 = reinterpret_cast<const char*>(chars);
-        SkUnichar currentChar;
+        SkUnichar currentChar = 0;
         if (glyphCount) {
             currentChar = SkUTF8_NextUnichar(&currentUtf8);
         }
@@ -2274,7 +2263,6 @@ void LogFontTypeface::onFilterRec(SkScalerContextRec* rec) const {
     }
 
     unsigned flagsWeDontSupport = SkScalerContext::kVertical_Flag |
-                                  SkScalerContext::kDevKernText_Flag |
                                   SkScalerContext::kForceAutohinting_Flag |
                                   SkScalerContext::kEmbeddedBitmapText_Flag |
                                   SkScalerContext::kEmbolden_Flag |
@@ -2435,7 +2423,7 @@ protected:
     virtual SkTypeface* onMatchFamilyStyle(const char familyName[],
                                            const SkFontStyle& fontstyle) const override {
         // could be in base impl
-        SkAutoTUnref<SkFontStyleSet> sset(this->matchFamily(familyName));
+        sk_sp<SkFontStyleSet> sset(this->matchFamily(familyName));
         return sset->matchStyle(fontstyle);
     }
 
@@ -2453,22 +2441,27 @@ protected:
         return this->matchFamilyStyle(familyName.c_str(), fontstyle);
     }
 
-    SkTypeface* onCreateFromStream(SkStreamAsset* bareStream, int ttcIndex) const override {
-        std::unique_ptr<SkStreamAsset> stream(bareStream);
-        return create_from_stream(stream.get());
+    sk_sp<SkTypeface> onMakeFromStreamIndex(std::unique_ptr<SkStreamAsset> stream,
+                                            int ttcIndex) const override {
+        if (ttcIndex != 0) {
+            return nullptr;
+        }
+        return create_from_stream(std::move(stream));
     }
 
-    SkTypeface* onCreateFromData(SkData* data, int ttcIndex) const override {
+    sk_sp<SkTypeface> onMakeFromData(sk_sp<SkData> data, int ttcIndex) const override {
         // could be in base impl
-        return this->createFromStream(new SkMemoryStream(sk_ref_sp(data)));
+        return this->makeFromStream(std::unique_ptr<SkStreamAsset>(new SkMemoryStream(std::move(data))),
+                                    ttcIndex);
     }
 
-    SkTypeface* onCreateFromFile(const char path[], int ttcIndex) const override {
+    sk_sp<SkTypeface> onMakeFromFile(const char path[], int ttcIndex) const override {
         // could be in base impl
-        return this->createFromStream(SkStream::MakeFromFile(path).release());
+        auto stream = SkStream::MakeFromFile(path);
+        return stream ? this->makeFromStream(std::move(stream), ttcIndex) : nullptr;
     }
 
-    SkTypeface* onLegacyCreateTypeface(const char familyName[], SkFontStyle style) const override {
+    sk_sp<SkTypeface> onLegacyMakeTypeface(const char familyName[], SkFontStyle style) const override {
         LOGFONT lf;
         if (nullptr == familyName) {
             lf = get_default_font();
@@ -2478,7 +2471,7 @@ protected:
 
         lf.lfWeight = style.weight();
         lf.lfItalic = style.slant() == SkFontStyle::kUpright_Slant ? FALSE : TRUE;
-        return SkCreateTypefaceFromLOGFONT(lf);
+        return sk_sp<SkTypeface>(SkCreateTypefaceFromLOGFONT(lf));
     }
 
 private:
@@ -2487,6 +2480,6 @@ private:
 
 ///////////////////////////////////////////////////////////////////////////////
 
-SkFontMgr* SkFontMgr_New_GDI() { return new SkFontMgrGDI; }
+sk_sp<SkFontMgr> SkFontMgr_New_GDI() { return sk_make_sp<SkFontMgrGDI>(); }
 
-#endif//defined(SK_BUILD_FOR_WIN32)
+#endif//defined(SK_BUILD_FOR_WIN)

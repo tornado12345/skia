@@ -17,8 +17,22 @@
 
 #include "SkFontMgr.h"
 
-#include <ft2build.h>
-#include FT_FREETYPE_H
+// These are forward declared to avoid pimpl but also hide the FreeType implementation.
+typedef struct FT_LibraryRec_* FT_Library;
+typedef struct FT_FaceRec_* FT_Face;
+typedef struct FT_StreamRec_* FT_Stream;
+typedef signed long FT_Pos;
+
+
+#ifdef SK_DEBUG
+const char* SkTraceFtrGetError(int);
+#define SK_TRACEFTR(ERR, MSG, ...) \
+    SkDebugf("%s:%lu:1: error: 0x%x '%s' " MSG "\n", __FILE__, __LINE__, ERR, \
+            SkTraceFtrGetError((int)(ERR)), __VA_ARGS__)
+#else
+#define SK_TRACEFTR(ERR, ...) do { sk_ignore_unused_variable(ERR); } while (false)
+#endif
+
 
 class SkScalerContext_FreeType_Base : public SkScalerContext {
 protected:
@@ -32,7 +46,7 @@ protected:
     {}
 
     void generateGlyphImage(FT_Face face, const SkGlyph& glyph, const SkMatrix& bitmapTransform);
-    void generateGlyphPath(FT_Face face, SkPath* path);
+    bool generateGlyphPath(FT_Face face, SkPath* path);
 private:
     typedef SkScalerContext INHERITED;
 };
@@ -59,7 +73,7 @@ public:
                       AxisDefinitions* axes) const;
         static void computeAxisValues(
             AxisDefinitions axisDefinitions,
-            const SkFontMgr::FontParameters::Axis* requestedAxis, int requestedAxisCount,
+            const SkFontArguments::VariationPosition position,
             SkFixed* axisValues,
             const SkString& name);
 
@@ -77,8 +91,7 @@ protected:
     virtual SkScalerContext* onCreateScalerContext(const SkScalerContextEffects&,
                                                    const SkDescriptor*) const override;
     void onFilterRec(SkScalerContextRec*) const override;
-    SkAdvancedTypefaceMetrics* onGetAdvancedTypefaceMetrics(
-                        PerGlyphInfo, const uint32_t*, uint32_t) const override;
+    std::unique_ptr<SkAdvancedTypefaceMetrics> onGetAdvancedMetrics() const override;
     int onGetUPEM() const override;
     bool onGetKerningPairAdjustments(const uint16_t glyphs[], int count,
                                      int32_t adjustments[]) const override;
@@ -88,6 +101,8 @@ protected:
 
     LocalizedStrings* onCreateFamilyNameIterator() const override;
 
+    int onGetVariationDesignPosition(SkFontArguments::VariationPosition::Coordinate coordinates[],
+                                     int coordinateCount) const override;
     int onGetTableTags(SkFontTableTag tags[]) const override;
     size_t onGetTableData(SkFontTableTag, size_t offset,
                           size_t length, void* data) const override;

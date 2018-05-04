@@ -8,105 +8,88 @@
 #ifndef GrRenderTargetOpList_DEFINED
 #define GrRenderTargetOpList_DEFINED
 
-#include "GrClip.h"
-#include "GrContext.h"
+#include "GrAppliedClip.h"
 #include "GrOpList.h"
-#include "GrPathProcessor.h"
-#include "GrPrimitiveProcessor.h"
 #include "GrPathRendering.h"
-#include "GrXferProcessor.h"
-
-#include "batches/GrDrawBatch.h"
-
+#include "GrPrimitiveProcessor.h"
+#include "ops/GrOp.h"
+#include "SkArenaAlloc.h"
 #include "SkClipStack.h"
 #include "SkMatrix.h"
-#include "SkPath.h"
 #include "SkStringUtils.h"
 #include "SkStrokeRec.h"
 #include "SkTArray.h"
 #include "SkTLazy.h"
 #include "SkTypes.h"
-#include "SkXfermode.h"
 
 class GrAuditTrail;
-class GrBatch;
-class GrClearBatch;
-class GrClip;
+class GrClearOp;
 class GrCaps;
-class GrPath;
-class GrDrawPathBatchBase;
-class GrPipelineBuilder;
 class GrRenderTargetProxy;
 
 class GrRenderTargetOpList final : public GrOpList {
-public:
-    /** Options for GrRenderTargetOpList behavior. */
-    struct Options {
-        Options ()
-            : fClipBatchToBounds(false)
-            , fDrawBatchBounds(false)
-            , fMaxBatchLookback(-1)
-            , fMaxBatchLookahead(-1) {}
-        bool fClipBatchToBounds;
-        bool fDrawBatchBounds;
-        int  fMaxBatchLookback;
-        int  fMaxBatchLookahead;
-    };
+private:
+    using DstProxy = GrXferProcessor::DstProxy;
 
-    GrRenderTargetOpList(GrRenderTargetProxy*, GrGpu*, GrResourceProvider*,
-                         GrAuditTrail*, const Options&);
+public:
+    GrRenderTargetOpList(GrResourceProvider*, GrRenderTargetProxy*, GrAuditTrail*);
 
     ~GrRenderTargetOpList() override;
 
-    void makeClosed() override {
-        INHERITED::makeClosed();
+    void makeClosed(const GrCaps& caps) override {
+        if (this->isClosed()) {
+            return;
+        }
 
-        fLastFullClearBatch = nullptr;
-        this->forwardCombine();
+        this->forwardCombine(caps);
+
+        INHERITED::makeClosed(caps);
     }
+
+    bool isEmpty() const { return fRecordedOps.empty(); }
 
     /**
      * Empties the draw buffer of any queued up draws.
      */
-    void reset() override;
-
-    void abandonGpuResources() override;
-    void freeGpuResources() override;
+    void endFlush() override;
 
     /**
      * Together these two functions flush all queued up draws to GrCommandBuffer. The return value
-     * of drawBatches() indicates whether any commands were actually issued to the GPU.
+     * of executeOps() indicates whether any commands were actually issued to the GPU.
      */
-    void prepareBatches(GrBatchFlushState* flushState) override;
-    bool drawBatches(GrBatchFlushState* flushState) override;
+    void onPrepare(GrOpFlushState* flushState) override;
+    bool onExecute(GrOpFlushState* flushState) override;
 
-    /**
-     * Gets the capabilities of the draw target.
-     */
-    const GrCaps* caps() const { return fGpu->caps(); }
+    uint32_t addOp(std::unique_ptr<GrOp> op, const GrCaps& caps) {
+        auto addDependency = [ &caps, this ] (GrSurfaceProxy* p) {
+            this->addDependency(p, caps);
+        };
 
-    void drawBatch(const GrPipelineBuilder&, GrRenderTargetContext*, const GrClip&, GrDrawBatch*);
+        op->visitProxies(addDependency);
 
-    void addBatch(sk_sp<GrBatch>);
+        this->recordOp(std::move(op), caps);
 
-    /**
-     * Draws the path into user stencil bits. Upon return, all user stencil values
-     * inside the path will be nonzero. The path's fill must be either even/odd or
-     * winding (notnverse or hairline).It will respect the HW antialias boolean (if
-     * possible in the 3D API).  Note, we will never have an inverse fill with
-     * stencil path.
-     */
-    void stencilPath(GrRenderTargetContext*,
-                     const GrClip&,
-                     bool useHWAA,
-                     const SkMatrix& viewMatrix,
-                     const GrPath*);
+        return this->uniqueID();
+    }
+
+    uint32_t addOp(std::unique_ptr<GrOp> op, const GrCaps& caps,
+                   GrAppliedClip&& clip, const DstProxy& dstProxy) {
+        auto addDependency = [ &caps, this ] (GrSurfaceProxy* p) {
+            this->addDependency(p, caps);
+        };
+
+        op->visitProxies(addDependency);
+        clip.visitProxies(addDependency);
+
+        this->recordOp(std::move(op), caps, clip.doesClip() ? &clip : nullptr, &dstProxy);
+
+        return this->uniqueID();
+    }
+
+    void discard();
 
     /** Clears the entire render target */
-    void fullClear(GrRenderTarget*, GrColor color);
-
-    /** Discards the contents render target. */
-    void discard(GrRenderTarget*);
+    void fullClear(const GrCaps& caps, GrColor color);
 
     /**
      * Copies a pixel rectangle from one surface to another. This call may finalize
@@ -118,60 +101,72 @@ public:
      * depending on the type of surface, configs, etc, and the backend-specific
      * limitations.
      */
-    bool copySurface(GrSurface* dst,
-                     GrSurface* src,
+    bool copySurface(const GrCaps& caps,
+                     GrSurfaceProxy* dst,
+                     GrSurfaceProxy* src,
                      const SkIRect& srcRect,
-                     const SkIPoint& dstPoint);
+                     const SkIPoint& dstPoint) override;
 
-    gr_instanced::InstancedRendering* instancedRendering() const {
-        SkASSERT(fInstancedRendering);
-        return fInstancedRendering.get();
-    }
+    GrRenderTargetOpList* asRenderTargetOpList() override { return this; }
 
-    SkDEBUGCODE(void dump() const override;)
+    SkDEBUGCODE(void dump(bool printDependencies) const override;)
+
+    SkDEBUGCODE(int numOps() const override { return fRecordedOps.count(); })
+    SkDEBUGCODE(int numClips() const override { return fNumClips; })
+    SkDEBUGCODE(void visitProxies_debugOnly(const GrOp::VisitProxyFunc&) const;)
 
 private:
-    friend class GrRenderTargetContextPriv; // for clearStencilClip and stencil clip state.
+    friend class GrRenderTargetContextPriv; // for stencil clip state. TODO: this is invasive
 
-    // Returns the batch that the input batch was combined with or the input batch if it wasn't
-    // combined.
-    GrBatch* recordBatch(GrBatch*, const SkRect& clippedBounds);
-    void forwardCombine();
+    struct RecordedOp {
+        RecordedOp(std::unique_ptr<GrOp> op, GrAppliedClip* appliedClip, const DstProxy* dstProxy)
+                : fOp(std::move(op)), fAppliedClip(appliedClip) {
+            if (dstProxy) {
+                fDstProxy = *dstProxy;
+            }
+        }
 
-    // Makes a copy of the dst if it is necessary for the draw. Returns false if a copy is required
-    // but couldn't be made. Otherwise, returns true.  This method needs to be protected because it
-    // needs to be accessed by GLPrograms to setup a correct drawstate
-    bool setupDstReadIfNecessary(const GrPipelineBuilder&,
-                                 GrRenderTarget*,
-                                 const GrClip&,
-                                 const GrPipelineOptimizations& optimizations,
-                                 GrXferProcessor::DstTexture*,
-                                 const SkRect& batchBounds);
+        void visitProxies(const GrOp::VisitProxyFunc& func) const {
+            if (fOp) {
+                fOp->visitProxies(func);
+            }
+            if (fDstProxy.proxy()) {
+                func(fDstProxy.proxy());
+            }
+            if (fAppliedClip) {
+                fAppliedClip->visitProxies(func);
+            }
+        }
 
-    // Used only via GrRenderTargetContextPriv.
-    void clearStencilClip(const GrFixedClip&, bool insideStencilMask, GrRenderTarget*);
-
-    struct RecordedBatch {
-        sk_sp<GrBatch> fBatch;
-        SkRect         fClippedBounds;
+        std::unique_ptr<GrOp> fOp;
+        DstProxy fDstProxy;
+        GrAppliedClip* fAppliedClip;
     };
-    SkSTArray<256, RecordedBatch, true>             fRecordedBatches;
-    GrClearBatch*                                   fLastFullClearBatch;
-    // The context is only in service of the GrClip, remove once it doesn't need this.
-    GrContext*                                      fContext;
-    GrGpu*                                          fGpu;
-    GrResourceProvider*                             fResourceProvider;
 
-    bool                                            fClipBatchToBounds;
-    bool                                            fDrawBatchBounds;
-    int                                             fMaxBatchLookback;
-    int                                             fMaxBatchLookahead;
+    void purgeOpsWithUninstantiatedProxies() override;
 
-    std::unique_ptr<gr_instanced::InstancedRendering> fInstancedRendering;
+    void gatherProxyIntervals(GrResourceAllocator*) const override;
 
-    int32_t                                         fLastClipStackGenID;
-    SkIRect                                         fLastClipStackRect;
-    SkIPoint                                        fLastClipOrigin;
+    void recordOp(std::unique_ptr<GrOp>, const GrCaps& caps,
+                  GrAppliedClip* = nullptr, const DstProxy* = nullptr);
+
+    void forwardCombine(const GrCaps&);
+
+    // If this returns true then b has been merged into a's op.
+    bool combineIfPossible(const RecordedOp& a, GrOp* b, const GrAppliedClip* bClip,
+                           const DstProxy* bDstTexture, const GrCaps&);
+
+    uint32_t                       fLastClipStackGenID;
+    SkIRect                        fLastDevClipBounds;
+    int                            fLastClipNumAnalyticFPs;
+
+    // For ops/opList we have mean: 5 stdDev: 28
+    SkSTArray<5, RecordedOp, true> fRecordedOps;
+
+    // MDB TODO: 4096 for the first allocation of the clip space will be huge overkill.
+    // Gather statistics to determine the correct size.
+    SkArenaAlloc                   fClipAllocator{4096};
+    SkDEBUGCODE(int                fNumClips;)
 
     typedef GrOpList INHERITED;
 };

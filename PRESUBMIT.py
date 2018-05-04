@@ -31,6 +31,8 @@ PUBLIC_API_OWNERS = (
     'bsalomon@google.com',
     'djsollen@chromium.org',
     'djsollen@google.com',
+    'hcm@chromium.org',
+    'hcm@google.com',
 )
 
 AUTHORS_FILE_NAME = 'AUTHORS'
@@ -40,12 +42,11 @@ GOLD_TRYBOT_URL = 'https://gold.skia.org/search?issue='
 
 # Path to CQ bots feature is described in https://bug.skia.org/4364
 PATH_PREFIX_TO_EXTRA_TRYBOTS = {
-    # pylint: disable=line-too-long
-    'src/opts/': 'master.client.skia:Test-Ubuntu-GCC-GCE-CPU-AVX2-x86_64-Release-SKNX_NO_SIMD-Trybot',
-
-    'include/private/SkAtomics.h': ('master.client.skia:'
-      'Test-Ubuntu-Clang-GCE-CPU-AVX2-x86_64-Release-TSAN-Trybot,'
-      'Test-Ubuntu-Clang-Golo-GPU-GT610-x86_64-Release-TSAN-Trybot'
+    'src/opts/': ('skia.primary:'
+      'Test-Debian9-Clang-GCE-CPU-AVX2-x86_64-Release-All-SKNX_NO_SIMD'),
+    'include/private/SkAtomics.h': ('skia.primary:'
+      'Test-Debian9-Clang-GCE-CPU-AVX2-x86_64-Release-All-TSAN,'
+      'Test-Ubuntu17-Clang-Golo-GPU-QuadroP400-x86_64-Release-All-TSAN'
     ),
 
     # Below are examples to show what is possible with this feature.
@@ -53,6 +54,10 @@ PATH_PREFIX_TO_EXTRA_TRYBOTS = {
     # 'src/svg/parser/': 'master3:ghi,jkl;master4:mno',
     # 'src/image/SkImage_Base.h': 'master5:pqr,stu;master1:abc1;master2:def',
 }
+
+SERVICE_ACCOUNT_SUFFIX = [
+    '@%s.iam.gserviceaccount.com' % project for project in [
+        'skia-buildbots.google.com', 'skia-swarming-bots']]
 
 
 def _CheckChangeHasEol(input_api, output_api, source_file_filter=None):
@@ -73,6 +78,9 @@ def _CheckChangeHasEol(input_api, output_api, source_file_filter=None):
 
 def _PythonChecks(input_api, output_api):
   """Run checks on any modified Python files."""
+  pylint_disabled_files = (
+      'infra/bots/recipes.py',
+  )
   pylint_disabled_warnings = (
       'F0401',  # Unable to import.
       'E0611',  # No name in module.
@@ -90,11 +98,35 @@ def _PythonChecks(input_api, output_api):
   for affected_file in input_api.AffectedSourceFiles(None):
     affected_file_path = affected_file.LocalPath()
     if affected_file_path.endswith('.py'):
-      affected_python_files.append(affected_file_path)
+      if affected_file_path not in pylint_disabled_files:
+        affected_python_files.append(affected_file_path)
   return input_api.canned_checks.RunPylint(
       input_api, output_api,
       disabled_warnings=pylint_disabled_warnings,
       white_list=affected_python_files)
+
+
+def _JsonChecks(input_api, output_api):
+  """Run checks on any modified json files."""
+  failing_files = []
+  for affected_file in input_api.AffectedFiles(None):
+    affected_file_path = affected_file.LocalPath()
+    is_json = affected_file_path.endswith('.json')
+    is_metadata = (affected_file_path.startswith('site/') and
+                   affected_file_path.endswith('/METADATA'))
+    if is_json or is_metadata:
+      try:
+        input_api.json.load(open(affected_file_path, 'r'))
+      except ValueError:
+        failing_files.append(affected_file_path)
+
+  results = []
+  if failing_files:
+    results.append(
+        output_api.PresubmitError(
+            'The following files contain invalid json:\n%s\n\n' %
+                '\n'.join(failing_files)))
+  return results
 
 
 def _IfDefChecks(input_api, output_api):
@@ -206,8 +238,6 @@ def _CommonChecks(input_api, output_api):
   """Presubmit checks common to upload and commit."""
   results = []
   sources = lambda x: (x.LocalPath().endswith('.h') or
-                       x.LocalPath().endswith('.gypi') or
-                       x.LocalPath().endswith('.gyp') or
                        x.LocalPath().endswith('.py') or
                        x.LocalPath().endswith('.sh') or
                        x.LocalPath().endswith('.m') or
@@ -219,7 +249,14 @@ def _CommonChecks(input_api, output_api):
   results.extend(
       _CheckChangeHasEol(
           input_api, output_api, source_file_filter=sources))
+  results.extend(
+      input_api.canned_checks.CheckChangeHasNoCR(
+          input_api, output_api, source_file_filter=sources))
+  results.extend(
+      input_api.canned_checks.CheckChangeHasNoStrayWhitespace(
+          input_api, output_api, source_file_filter=sources))
   results.extend(_PythonChecks(input_api, output_api))
+  results.extend(_JsonChecks(input_api, output_api))
   results.extend(_IfDefChecks(input_api, output_api))
   results.extend(_CopyrightChecks(input_api, output_api,
                                   source_file_filter=sources))
@@ -287,56 +324,32 @@ class CodeReview(object):
   def __init__(self, input_api):
     self._issue = input_api.change.issue
     self._gerrit = input_api.gerrit
-    self._rietveld_properties = None
-    if not self._gerrit:
-      self._rietveld_properties = input_api.rietveld.get_issue_properties(
-          issue=int(self._issue), messages=True)
 
   def GetOwnerEmail(self):
-    if self._gerrit:
-      return self._gerrit.GetChangeOwner(self._issue)
-    else:
-      return self._rietveld_properties['owner_email']
+    return self._gerrit.GetChangeOwner(self._issue)
 
   def GetSubject(self):
-    if self._gerrit:
-      return self._gerrit.GetChangeInfo(self._issue)['subject']
-    else:
-      return self._rietveld_properties['subject']
+    return self._gerrit.GetChangeInfo(self._issue)['subject']
 
   def GetDescription(self):
-    if self._gerrit:
-      return self._gerrit.GetChangeDescription(self._issue)
-    else:
-      return self._rietveld_properties['description']
+    return self._gerrit.GetChangeDescription(self._issue)
 
   def IsDryRun(self):
-    if self._gerrit:
-      return self._gerrit.GetChangeInfo(
-          self._issue)['labels']['Commit-Queue'].get('value', 0) == 1
-    else:
-      return self._rietveld_properties['cq_dry_run']
+    return self._gerrit.GetChangeInfo(
+        self._issue)['labels']['Commit-Queue'].get('value', 0) == 1
 
   def GetReviewers(self):
-    if self._gerrit:
-      code_review_label = (
-          self._gerrit.GetChangeInfo(self._issue)['labels']['Code-Review'])
-      return [r['email'] for r in code_review_label.get('all', [])]
-    else:
-      return self._rietveld_properties['reviewers']
+    code_review_label = (
+        self._gerrit.GetChangeInfo(self._issue)['labels']['Code-Review'])
+    return [r['email'] for r in code_review_label.get('all', [])]
 
   def GetApprovers(self):
     approvers = []
-    if self._gerrit:
-      code_review_label = (
-          self._gerrit.GetChangeInfo(self._issue)['labels']['Code-Review'])
-      for m in code_review_label.get('all', []):
-        if m.get("value") == 1:
-          approvers.append(m["email"])
-    else:
-      for m in self._rietveld_properties.get('messages', []):
-        if 'lgtm' in m['text'].lower():
-          approvers.append(m['sender'])
+    code_review_label = (
+        self._gerrit.GetChangeInfo(self._issue)['labels']['Code-Review'])
+    for m in code_review_label.get('all', []):
+      if m.get("value") == 1:
+        approvers.append(m["email"])
     return approvers
 
 
@@ -346,6 +359,12 @@ def _CheckOwnerIsInAuthorsFile(input_api, output_api):
     cr = CodeReview(input_api)
 
     owner_email = cr.GetOwnerEmail()
+
+    # Service accounts don't need to be in AUTHORS.
+    for suffix in SERVICE_ACCOUNT_SUFFIX:
+      if owner_email.endswith(suffix):
+        return results
+
     try:
       authors_content = ''
       for line in open(AUTHORS_FILE_NAME):
@@ -438,25 +457,30 @@ def _CheckLGTMsForPublicAPI(input_api, output_api):
             "If this CL adds to or changes Skia's public API, you need an LGTM "
             "from any of %s.  If this CL only removes from or doesn't change "
             "Skia's public API, please add a short note to the CL saying so. "
-            "Add one of the owners as a reviewer to your CL. For Rietveld CLs "
-            "you also need to add one of those owners on a TBR= line.  If you "
-            "don't know if this CL affects Skia's public API, treat it like it "
-            "does." % str(PUBLIC_API_OWNERS)))
+            "Add one of the owners as a reviewer to your CL as well as to the "
+            "TBR= line.  If you don't know if this CL affects Skia's public "
+            "API, treat it like it does." % str(PUBLIC_API_OWNERS)))
   return results
+
+
+def _FooterExists(footers, key, value):
+  for k, v in footers:
+    if k == key and v == value:
+      return True
+  return False
 
 
 def PostUploadHook(cl, change, output_api):
   """git cl upload will call this hook after the issue is created/modified.
 
   This hook does the following:
-  * Adds a link to the CL's Gold trybot results.
   * Adds a link to preview docs changes if there are any docs changes in the CL.
-  * Adds 'NOTRY=true' if the CL contains only docs changes.
-  * Adds 'NOTREECHECKS=true' for non master branch changes since they do not
+  * Adds 'No-Try: true' if the CL contains only docs changes.
+  * Adds 'No-Tree-Checks: true' for non master branch changes since they do not
     need to be gated on the master branch's tree.
-  * Adds 'NOTRY=true' for non master branch changes since trybots do not yet
+  * Adds 'No-Try: true' for non master branch changes since trybots do not yet
     work on them.
-  * Adds 'NOPRESUBMIT=true' for non master branch changes since those don't
+  * Adds 'No-Presubmit: true' for non master branch changes since those don't
     run the presubmit checks.
   * Adds extra trybots for the paths defined in PATH_TO_EXTRA_TRYBOTS.
   """
@@ -476,76 +500,65 @@ def PostUploadHook(cl, change, output_api):
 
   issue = cl.issue
   if issue:
-    original_description = cl.GetDescription()
-    changeIdLine = None
-    if cl.IsGerrit():
-      # Remove Change-Id from description and add it back at the end.
-      regex = re.compile(r'^(Change-Id: (\w+))(\n*)\Z', re.M | re.I)
-      changeIdLine = re.search(regex, original_description).group(0)
-      original_description = re.sub(regex, '', original_description)
-      original_description = re.sub('\n+\Z', '\n', original_description)
+    # Skip PostUploadHooks for all auto-commit service account bots. New
+    # patchsets (caused due to PostUploadHooks) invalidates the CQ+2 vote from
+    # the "--use-commit-queue" flag to "git cl upload".
+    for suffix in SERVICE_ACCOUNT_SUFFIX:
+      if cl.GetIssueOwner().endswith(suffix):
+        return results
 
-    new_description = original_description
+    original_description_lines, footers = cl.GetDescriptionFooters()
+    new_description_lines = list(original_description_lines)
 
-    # Add GOLD_TRYBOT_URL if it does not exist yet.
-    if not re.search(r'^GOLD_TRYBOT_URL=', new_description, re.M | re.I):
-      new_description += '\nGOLD_TRYBOT_URL= %s%s' % (GOLD_TRYBOT_URL, issue)
-      results.append(
-          output_api.PresubmitNotifyResult(
-              'Added link to Gold trybot runs to the CL\'s description.\n'
-              'Note: Results may take sometime to be populated after trybots '
-              'complete.'))
-
-    # If the change includes only doc changes then add NOTRY=true in the
+    # If the change includes only doc changes then add No-Try: true in the
     # CL's description if it does not exist yet.
-    if all_docs_changes and not re.search(
-        r'^NOTRY=true$', new_description, re.M | re.I):
-      new_description += '\nNOTRY=true'
+    if all_docs_changes and not _FooterExists(footers, 'No-Try', 'true'):
+      new_description_lines.append('No-Try: true')
       results.append(
           output_api.PresubmitNotifyResult(
               'This change has only doc changes. Automatically added '
-              '\'NOTRY=true\' to the CL\'s description'))
+              '\'No-Try: true\' to the CL\'s description'))
 
     # If there is atleast one docs change then add preview link in the CL's
     # description if it does not already exist there.
-    if atleast_one_docs_change and not re.search(
-        r'^DOCS_PREVIEW=.*', new_description, re.M | re.I):
+    docs_preview_link = '%s%s' % (DOCS_PREVIEW_URL, issue)
+    docs_preview_line = 'Docs-Preview: %s' % docs_preview_link
+    if (atleast_one_docs_change and
+        not _FooterExists(footers, 'Docs-Preview', docs_preview_link)):
       # Automatically add a link to where the docs can be previewed.
-      new_description += '\nDOCS_PREVIEW= %s%s' % (DOCS_PREVIEW_URL, issue)
+      new_description_lines.append(docs_preview_line)
       results.append(
           output_api.PresubmitNotifyResult(
               'Automatically added a link to preview the docs changes to the '
               'CL\'s description'))
 
-    # If the target ref is not master then add NOTREECHECKS=true and NOTRY=true
-    # to the CL's description if it does not already exist there.
+    # If the target ref is not master then add 'No-Tree-Checks: true' and
+    # 'No-Try: true' to the CL's description if it does not already exist there.
     target_ref = cl.GetRemoteBranch()[1]
     if target_ref != 'refs/remotes/origin/master':
-      if not re.search(
-          r'^NOTREECHECKS=true$', new_description, re.M | re.I):
-        new_description += "\nNOTREECHECKS=true"
+      if not _FooterExists(footers, 'No-Tree-Checks', 'true'):
+        new_description_lines.append('No-Tree-Checks: true')
         results.append(
             output_api.PresubmitNotifyResult(
                 'Branch changes do not need to rely on the master branch\'s '
-                'tree status. Automatically added \'NOTREECHECKS=true\' to the '
-                'CL\'s description'))
-      if not re.search(
-          r'^NOTRY=true$', new_description, re.M | re.I):
-        new_description += "\nNOTRY=true"
+                'tree status. Automatically added \'No-Tree-Checks: true\' to '
+                'the CL\'s description'))
+      if not _FooterExists(footers, 'No-Try', 'true'):
+        new_description_lines.append('No-Try: true')
         results.append(
             output_api.PresubmitNotifyResult(
                 'Trybots do not yet work for non-master branches. '
-                'Automatically added \'NOTRY=true\' to the CL\'s description'))
-      if not re.search(
-          r'^NOPRESUBMIT=true$', new_description, re.M | re.I):
-        new_description += "\nNOPRESUBMIT=true"
+                'Automatically added \'No-Try: true\' to the CL\'s '
+                'description'))
+      if not _FooterExists(footers, 'No-Presubmit', 'true'):
+        new_description_lines.append('No-Presubmit: true')
         results.append(
             output_api.PresubmitNotifyResult(
                 'Branch changes do not run the presubmit checks.'))
 
-    # Automatically set CQ_INCLUDE_TRYBOTS if any of the changed files here
+    # Automatically set Cq-Include-Trybots if any of the changed files here
     # begin with the paths of interest.
-    cq_master_to_trybots = collections.defaultdict(set)
+    bots_to_include = []
     for affected_file in change.AffectedFiles():
       affected_file_path = affected_file.LocalPath()
       for path_prefix, extra_bots in PATH_PREFIX_TO_EXTRA_TRYBOTS.iteritems():
@@ -554,65 +567,18 @@ def PostUploadHook(cl, change, output_api):
               output_api.PresubmitNotifyResult(
                   'Your CL modifies the path %s.\nAutomatically adding %s to '
                   'the CL description.' % (affected_file_path, extra_bots)))
-          _MergeCQExtraTrybotsMaps(
-              cq_master_to_trybots, _GetCQExtraTrybotsMap(extra_bots))
-    if cq_master_to_trybots:
-      new_description = _AddCQExtraTrybotsToDesc(
-          cq_master_to_trybots, new_description)
+          bots_to_include.append(extra_bots)
+    if bots_to_include:
+      output_api.EnsureCQIncludeTrybotsAreAdded(
+          cl, bots_to_include, new_description_lines)
 
     # If the description has changed update it.
-    if new_description != original_description:
-      if changeIdLine:
-        # The Change-Id line must have two newlines before it.
-        new_description += '\n\n' + changeIdLine
-      cl.UpdateDescription(new_description)
+    if new_description_lines != original_description_lines:
+      # Add a new line separating the new contents from the old contents.
+      new_description_lines.insert(len(original_description_lines), '')
+      cl.UpdateDescriptionFooters(new_description_lines, footers)
 
     return results
-
-
-def _AddCQExtraTrybotsToDesc(cq_master_to_trybots, description):
-  """Adds the specified master and trybots to the CQ_INCLUDE_TRYBOTS keyword.
-
-  If the keyword already exists in the description then it appends to it only
-  if the specified values do not already exist.
-  If the keyword does not exist then it creates a new section in the
-  description.
-  """
-  match = re.search(r'^CQ_INCLUDE_TRYBOTS=(.*)$', description, re.M | re.I)
-  if match:
-    original_trybots_map = _GetCQExtraTrybotsMap(match.group(1))
-    _MergeCQExtraTrybotsMaps(cq_master_to_trybots, original_trybots_map)
-    new_description = description.replace(
-        match.group(0), _GetCQExtraTrybotsStr(cq_master_to_trybots))
-  else:
-    new_description = description + "\n%s" % (
-        _GetCQExtraTrybotsStr(cq_master_to_trybots))
-  return new_description
-
-
-def _MergeCQExtraTrybotsMaps(dest_map, map_to_be_consumed):
-  """Merges two maps of masters to trybots into one."""
-  for master, trybots in map_to_be_consumed.iteritems():
-    dest_map[master].update(trybots)
-  return dest_map
-
-
-def _GetCQExtraTrybotsMap(cq_extra_trybots_str):
-  """Parses CQ_INCLUDE_TRYBOTS str and returns a map of masters to trybots."""
-  cq_master_to_trybots = collections.defaultdict(set)
-  for section in cq_extra_trybots_str.split(';'):
-    if section:
-      master, bots = section.split(':')
-      cq_master_to_trybots[master].update(bots.split(','))
-  return cq_master_to_trybots
-
-
-def _GetCQExtraTrybotsStr(cq_master_to_trybots):
-  """Constructs the CQ_INCLUDE_TRYBOTS str from a map of masters to trybots."""
-  sections = []
-  for master, trybots in cq_master_to_trybots.iteritems():
-    sections.append('%s:%s' % (master, ','.join(trybots)))
-  return 'CQ_INCLUDE_TRYBOTS=%s' % ';'.join(sections)
 
 
 def CheckChangeOnCommit(input_api, output_api):
@@ -631,4 +597,8 @@ def CheckChangeOnCommit(input_api, output_api):
           SKIA_TREE_STATUS_URL + '/banner-status?format=json')))
   results.extend(_CheckLGTMsForPublicAPI(input_api, output_api))
   results.extend(_CheckOwnerIsInAuthorsFile(input_api, output_api))
+  # Checks for the presence of 'DO NOT''SUBMIT' in CL description and in
+  # content of files.
+  results.extend(
+      input_api.canned_checks.CheckDoNotSubmit(input_api, output_api))
   return results

@@ -15,7 +15,6 @@
 #include "SkRegion.h"
 #include "SkShader.h"
 #include "SkUtils.h"
-#include "SkXfermode.h"
 #include "SkColorPriv.h"
 #include "SkColorFilter.h"
 #include "SkTime.h"
@@ -77,15 +76,15 @@ protected:
     void onDrawContent(SkCanvas* canvas) override {
         canvas->drawBitmap(fBitmap, 0, 0);
 
-        canvas->translate(SkIntToScalar(20), SkIntToScalar(120));
+        canvas->translate(20, 120);
 
         SkPaint paint;
         SkRect  r;
 
         paint.setColor(SK_ColorGREEN);
-        canvas->drawRectCoords(0, 0, SkIntToScalar(100), SkIntToScalar(100), paint);
+        canvas->drawRect(SkRect::MakeWH(100, 100), paint);
         paint.setShader(fShader);
-        canvas->drawRectCoords(0, 0, SkIntToScalar(100), SkIntToScalar(100), paint);
+        canvas->drawRect(SkRect::MakeWH(100, 100), paint);
 
         canvas->translate(SkIntToScalar(110), 0);
 
@@ -99,15 +98,6 @@ protected:
         canvas->drawRect(r, paint);
         paint.setShader(make_bitmapfade(fBitmap));
         canvas->drawRect(r, paint);
-    }
-
-    SkView::Click* onFindClickHandler(SkScalar x, SkScalar y, unsigned modi) override {
-        this->inval(nullptr);
-        return this->INHERITED::onFindClickHandler(x, y, modi);
-    }
-
-    bool onClick(Click* click)  override {
-        return this->INHERITED::onClick(click);
     }
 
 private:

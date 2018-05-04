@@ -5,6 +5,7 @@
  * found in the LICENSE file.
  */
 
+#include "SkAutoMalloc.h"
 #include "SkPath.h"
 #include "SkRandom.h"
 #include "SkRegion.h"
@@ -270,6 +271,11 @@ static void test_write(const SkRegion& region, skiatest::Reporter* r) {
     SkAutoMalloc storage(bytesNeeded);
     const size_t bytesWritten = region.writeToMemory(storage.get());
     REPORTER_ASSERT(r, bytesWritten == bytesNeeded);
+
+    // Also check that the bytes are meaningful.
+    SkRegion copy;
+    REPORTER_ASSERT(r, copy.readFromMemory(storage.get(), bytesNeeded));
+    REPORTER_ASSERT(r, region == copy);
 }
 
 DEF_TEST(Region_writeToMemory, r) {
@@ -289,4 +295,142 @@ DEF_TEST(Region_writeToMemory, r) {
     REPORTER_ASSERT(r, nonEmpty);
     REPORTER_ASSERT(r, region.isComplex());
     test_write(region, r);
+
+    SkRegion complexRegion;
+    Union(&complexRegion, SkIRect::MakeXYWH(0, 0, 1, 1));
+    Union(&complexRegion, SkIRect::MakeXYWH(0, 0, 3, 3));
+    Union(&complexRegion, SkIRect::MakeXYWH(10, 0, 3, 3));
+    Union(&complexRegion, SkIRect::MakeXYWH(0, 10, 13, 3));
+    test_write(complexRegion, r);
+
+    Union(&complexRegion, SkIRect::MakeXYWH(10, 20, 3, 3));
+    Union(&complexRegion, SkIRect::MakeXYWH(0,  20, 3, 3));
+    test_write(complexRegion, r);
 }
+
+DEF_TEST(Region_readFromMemory_bad, r) {
+    // These assume what our binary format is: conceivably we could change it
+    // and might need to remove or change some of these tests.
+    SkRegion region;
+
+    {
+        // invalid boundary rectangle
+        int32_t data[5] = {0, 4, 4, 8, 2};
+        REPORTER_ASSERT(r, 0 == region.readFromMemory(data, sizeof(data)));
+    }
+    // Region Layout, Serialized Format:
+    //    COUNT LEFT TOP RIGHT BOTTOM Y_SPAN_COUNT TOTAL_INTERVAL_COUNT
+    //    Top ( Bottom Span_Interval_Count ( Left Right )* Sentinel )+ Sentinel
+    {
+        // Example of valid data
+        int32_t data[] = {9, 0, 0, 10, 10, 1, 2, 0, 10, 2, 0, 4, 6, 10,
+                          2147483647, 2147483647};
+        REPORTER_ASSERT(r, 0 != region.readFromMemory(data, sizeof(data)));
+    }
+    {
+        // Example of valid data with 4 intervals
+        int32_t data[] = {19, 0, 0, 30, 30, 3, 4, 0, 10, 2, 0, 10, 20, 30,
+                          2147483647, 20, 0, 2147483647, 30, 2, 0, 10, 20, 30,
+                          2147483647, 2147483647};
+        REPORTER_ASSERT(r, 0 != region.readFromMemory(data, sizeof(data)));
+    }
+    {
+        // Short count
+        int32_t data[] = {8, 0, 0, 10, 10, 1, 2, 0, 10, 2, 0, 4, 6, 10,
+                          2147483647, 2147483647};
+        REPORTER_ASSERT(r, 0 == region.readFromMemory(data, sizeof(data)));
+    }
+    {
+        // bounds don't match
+        int32_t data[] = {9, 0, 0, 10, 11, 1, 2, 0, 10, 2, 0, 4, 6, 10,
+                          2147483647, 2147483647};
+        REPORTER_ASSERT(r, 0 == region.readFromMemory(data, sizeof(data)));
+    }
+    {
+        //  bad yspan count
+        int32_t data[] = {9, 0, 0, 10, 10, 2, 2, 0, 10, 2, 0, 4, 6, 10,
+                          2147483647, 2147483647};
+        REPORTER_ASSERT(r, 0 == region.readFromMemory(data, sizeof(data)));
+    }
+    {
+        // bad int count
+        int32_t data[] = {9, 0, 0, 10, 10, 1, 3, 0, 10, 2, 0, 4, 6, 10,
+                          2147483647, 2147483647};
+        REPORTER_ASSERT(r, 0 == region.readFromMemory(data, sizeof(data)));
+    }
+    {
+        // bad final sentinal
+        int32_t data[] = {9, 0, 0, 10, 10, 1, 2, 0, 10, 2, 0, 4, 6, 10,
+                          2147483647, -1};
+        REPORTER_ASSERT(r, 0 == region.readFromMemory(data, sizeof(data)));
+    }
+    {
+        // bad row sentinal
+        int32_t data[] = {9, 0, 0, 10, 10, 1, 2, 0, 10, 2, 0, 4, 6, 10,
+                          -1, 2147483647};
+        REPORTER_ASSERT(r, 0 == region.readFromMemory(data, sizeof(data)));
+    }
+    {
+        // starts with empty yspan
+        int32_t data[] = {12, 0, 0, 10, 10, 2, 2, -5, 0, 0, 2147483647, 10,
+                          2, 0, 4, 6, 10, 2147483647, 2147483647};
+        REPORTER_ASSERT(r, 0 == region.readFromMemory(data, sizeof(data)));
+    }
+    {
+        // ends with empty yspan
+        int32_t data[] = {12, 0, 0, 10, 10, 2, 2, 0, 10, 2, 0, 4, 6, 10,
+                          2147483647, 15, 0, 2147483647, 2147483647};
+        REPORTER_ASSERT(r, 0 == region.readFromMemory(data, sizeof(data)));
+    }
+    {
+        // y intervals out of order
+        int32_t data[] = {19, 0, -20, 30, 10, 3, 4, 0, 10, 2, 0, 10, 20, 30,
+                          2147483647, -20, 0, 2147483647, -10, 2, 0, 10, 20, 30,
+                          2147483647, 2147483647};
+        REPORTER_ASSERT(r, 0 == region.readFromMemory(data, sizeof(data)));
+    }
+    {
+        // x intervals out of order
+        int32_t data[] = {9, 0, 0, 10, 10, 1, 2, 0, 10, 2, 6, 10, 0, 4,
+                          2147483647, 2147483647};
+        REPORTER_ASSERT(r, 0 == region.readFromMemory(data, sizeof(data)));
+    }
+}
+
+DEF_TEST(region_toobig, reporter) {
+    const int big = 1 << 30;
+    const SkIRect neg = SkIRect::MakeXYWH(-big, -big, 10, 10);
+    const SkIRect pos = SkIRect::MakeXYWH( big,  big, 10, 10);
+
+    REPORTER_ASSERT(reporter, !neg.isEmpty());
+    REPORTER_ASSERT(reporter, !pos.isEmpty());
+
+    SkRegion negR(neg);
+    SkRegion posR(pos);
+
+    REPORTER_ASSERT(reporter, !negR.isEmpty());
+    REPORTER_ASSERT(reporter, !posR.isEmpty());
+
+    SkRegion rgn;
+    rgn.op(negR, posR, SkRegion::kUnion_Op);
+
+    // If we union those to rectangles, the resulting coordinates span more than int32_t, so
+    // we must mark the region as empty.
+    REPORTER_ASSERT(reporter, rgn.isEmpty());
+}
+
+DEF_TEST(region_inverse_union_skbug_7491, reporter) {
+    SkPath path;
+    path.setFillType(SkPath::kInverseWinding_FillType);
+    path.moveTo(10, 20); path.lineTo(10, 30); path.lineTo(10.1f, 10); path.close();
+
+    SkRegion clip;
+    clip.op(SkIRect::MakeLTRB(10, 10, 15, 20), SkRegion::kUnion_Op);
+    clip.op(SkIRect::MakeLTRB(20, 10, 25, 20), SkRegion::kUnion_Op);
+
+    SkRegion rgn;
+    rgn.setPath(path, clip);
+
+    REPORTER_ASSERT(reporter, clip == rgn);
+}
+

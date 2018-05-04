@@ -5,6 +5,7 @@
  * found in the LICENSE file.
  */
 #include "gm.h"
+#include "sk_tool_utils.h"
 #include "SkGradientShader.h"
 
 using namespace skiagm;
@@ -215,7 +216,7 @@ class GradientsManyColorsGM : public GM {
     enum {
         W = 800,
     };
-    SkAutoTUnref<SkShader> fShader;
+    sk_sp<SkShader> fShader;
 
     typedef void (*Proc)(ColorPos*);
 public:

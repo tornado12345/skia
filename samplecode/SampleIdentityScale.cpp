@@ -17,6 +17,7 @@
 #include "SkRandom.h"
 #include "SkStream.h"
 #include "SkTime.h"
+#include "SkClipOpPriv.h"
 
 // Intended to exercise pixel snapping observed with scaled images (and
 // with non-scaled images, but for a different reason):  Bug 1145
@@ -24,11 +25,10 @@
 class IdentityScaleView : public SampleView {
 public:
     IdentityScaleView(const char imageFilename[]) {
-      SkString resourcePath = GetResourcePath(imageFilename);
-      if (!decode_file(resourcePath.c_str(), &fBM)) {
-          fBM.allocN32Pixels(1, 1);
-          *(fBM.getAddr32(0,0)) = 0xFF0000FF; // red == bad
-      }
+        if (!DecodeDataToBitmap(GetResourceAsData(imageFilename), &fBM)) {
+            fBM.allocN32Pixels(1, 1);
+            *(fBM.getAddr32(0,0)) = 0xFF0000FF; // red == bad
+        }
     }
 
 protected:
@@ -65,13 +65,12 @@ protected:
           SkRect r = { 100, 100, 356, 356 };
           SkPath clipPath;
           clipPath.addRoundRect(r, SkIntToScalar(5), SkIntToScalar(5));
-          canvas->clipPath(clipPath, SkCanvas::kIntersect_Op, SkToBool(1));
+          canvas->clipPath(clipPath, kIntersect_SkClipOp, true);
           text = "Scaled = 0";
         }
         canvas->drawBitmap( fBM, 100, 100, &paint );
         canvas->restore();
-        canvas->drawText( text, strlen(text), 100, 400, paint );
-        this->inval(nullptr);
+        canvas->drawString(text, 100, 400, paint );
     }
 
 private:
@@ -80,5 +79,5 @@ private:
 
 //////////////////////////////////////////////////////////////////////////////
 
-static SkView* MyFactory() { return new IdentityScaleView("mandrill_256.png"); }
+static SkView* MyFactory() { return new IdentityScaleView("images/mandrill_256.png"); }
 static SkViewRegister reg(MyFactory);

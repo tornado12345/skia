@@ -7,11 +7,13 @@
 
 #include "Test.h"
 
+#include "../include/core/SkBitmap.h"
 #include "../include/core/SkCanvas.h"
 #include "../include/core/SkPicture.h"
 #include "../include/core/SkStream.h"
 #include "../include/core/SkString.h"
 #include "../include/core/SkPictureRecorder.h"
+#include "../src/core/SkBlendModePriv.h"
 #include <cstring>
 
 // Verify that replay of a recording into a clipped canvas
@@ -149,8 +151,8 @@ DEF_TEST(SkRecordingAccuracyXfermode, reporter) {
         const SkBitmap& goldenBM = golden.recordAndReplay(drawer, clip, mode);
         const SkBitmap& pictureBM = picture.recordAndReplay(drawer, clip, mode);
 
-        size_t pixelsSize = goldenBM.getSize();
-        REPORTER_ASSERT(reporter, pixelsSize == pictureBM.getSize());
+        size_t pixelsSize = goldenBM.computeByteSize();
+        REPORTER_ASSERT(reporter, pixelsSize == pictureBM.computeByteSize());
 
         // The pixel arrays should match.
 #if FINEGRAIN
@@ -160,12 +162,12 @@ DEF_TEST(SkRecordingAccuracyXfermode, reporter) {
         if (memcmp(goldenBM.getPixels(), pictureBM.getPixels(), pixelsSize)) {
             numErrors++;
             errors.appendf("For SkXfermode %d %s:    SkPictureRecorder bitmap is wrong\n",
-                           iMode, SkXfermode::ModeName(mode));
+                           iMode, SkBlendMode_Name(mode));
         }
 #endif
     }
 
 #if !FINEGRAIN
-    REPORTER_ASSERT_MESSAGE(reporter, 0 == numErrors, errors.c_str());
+    REPORTER_ASSERT(reporter, 0 == numErrors, errors.c_str());
 #endif
 }

@@ -21,8 +21,6 @@
 #include "SkColorFilter.h"
 #include "SkTime.h"
 #include "SkTypeface.h"
-#include "SkXfermode.h"
-
 #include "SkStream.h"
 
 static const struct {
@@ -94,10 +92,9 @@ protected:
         SkPaint     paint;
         const char* s = "Lorem ipsum dolor sit amet, consectetuer adipiscing elit";
 
-        paint.setFlags(paint.getFlags() | SkPaint::kAntiAlias_Flag
-                                        | SkPaint::kDevKernText_Flag);
+        paint.setFlags(paint.getFlags() | SkPaint::kAntiAlias_Flag);
         paint.setTextSize(SkIntToScalar(14));
-        canvas.drawText(s, strlen(s), SkIntToScalar(8), SkIntToScalar(14), paint);
+        canvas.drawString(s, SkIntToScalar(8), SkIntToScalar(14), paint);
     }
 
     static void fill_pts(SkPoint pts[], size_t n, SkRandom* rand) {
@@ -121,7 +118,7 @@ protected:
 
 //        canvas->translate(0, SkIntToScalar(50));
 
-  //      canvas->drawText(style, strlen(style), SkIntToScalar(20), SkIntToScalar(20), paint);
+  //      canvas->drawString(style, SkIntToScalar(20), SkIntToScalar(20), paint);
 
         paint.setTypeface(SkTypeface::MakeFromFile("/skimages/samplefont.ttf"));
         paint.setAntiAlias(true);
@@ -150,7 +147,6 @@ protected:
     virtual SkView::Click* onFindClickHandler(SkScalar x, SkScalar y,
                                               unsigned modi) override {
         fClickX = x;
-        this->inval(nullptr);
         return this->INHERITED::onFindClickHandler(x, y, modi);
     }
 

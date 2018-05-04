@@ -6,12 +6,17 @@
  * found in the LICENSE file.
  */
 
+#ifndef SK_NO_COMMAND_BUFFER
+
 #include "SkMutex.h"
 #include "SkOnce.h"
+#include "SkTLS.h"
 #include "gl/GrGLInterface.h"
 #include "gl/GrGLAssembleInterface.h"
 #include "gl/command_buffer/GLTestContext_command_buffer.h"
 #include "../ports/SkOSLibrary.h"
+
+namespace {
 
 typedef void *EGLDisplay;
 typedef unsigned int EGLBoolean;
@@ -23,6 +28,7 @@ typedef void* EGLNativeDisplayType;
 typedef void* EGLNativeWindowType;
 typedef void (*__eglMustCastToProperFunctionPointerType)(void);
 #define EGL_FALSE 0
+#define EGL_TRUE 1
 #define EGL_OPENGL_ES2_BIT 0x0004
 #define EGL_CONTEXT_CLIENT_VERSION 0x3098
 #define EGL_NO_SURFACE ((EGLSurface)0)
@@ -43,6 +49,8 @@ typedef void (*__eglMustCastToProperFunctionPointerType)(void);
 #define EGL_NONE 0x3038
 #define EGL_WIDTH 0x3057
 #define EGL_HEIGHT 0x3056
+#define EGL_DRAW 0x3059
+#define EGL_READ 0x305A
 
 typedef EGLDisplay (*GetDisplayProc)(EGLNativeDisplayType display_id);
 typedef EGLBoolean (*InitializeProc)(EGLDisplay dpy, EGLint *major, EGLint *minor);
@@ -75,7 +83,6 @@ static GetProcAddressProc gfGetProcAddress = nullptr;
 static void* gLibrary = nullptr;
 static bool gfFunctionsLoadedSuccessfully = false;
 
-namespace {
 static void load_command_buffer_functions() {
     if (!gLibrary) {
         static constexpr const char* libName =
@@ -102,14 +109,11 @@ static void load_command_buffer_functions() {
             gfSwapBuffers = (SwapBuffersProc)GetProcedureAddress(gLibrary, "eglSwapBuffers");
             gfGetProcAddress = (GetProcAddressProc)GetProcedureAddress(gLibrary, "eglGetProcAddress");
 
-            gfFunctionsLoadedSuccessfully = gfGetDisplay && gfInitialize && gfTerminate &&
-                                            gfChooseConfig && gfCreateWindowSurface &&
-                                            gfCreatePbufferSurface && gfDestroySurface &&
-                                            gfCreateContext && gfDestroyContext && gfMakeCurrent &&
-                                            gfSwapBuffers && gfGetProcAddress;
-
-        } else {
-            SkDebugf("Could not load %s.\n", libName);
+            gfFunctionsLoadedSuccessfully =
+                    gfGetDisplay && gfInitialize && gfTerminate && gfChooseConfig &&
+                    gfCreateWindowSurface && gfCreatePbufferSurface && gfDestroySurface &&
+                    gfCreateContext && gfDestroyContext && gfMakeCurrent && gfSwapBuffers &&
+                    gfGetProcAddress;
         }
     }
 }
@@ -126,19 +130,93 @@ static void load_command_buffer_once() {
     once(load_command_buffer_functions);
 }
 
-static const GrGLInterface* create_command_buffer_interface() {
+static sk_sp<const GrGLInterface> create_command_buffer_interface() {
     load_command_buffer_once();
     if (!gfFunctionsLoadedSuccessfully) {
         return nullptr;
     }
-    return GrGLAssembleGLESInterface(gLibrary, command_buffer_get_gl_proc);
+    return GrGLMakeAssembledGLESInterface(gLibrary, command_buffer_get_gl_proc);
+}
+
+
+// The command buffer does not correctly implement eglGetCurrent. It always returns EGL_NO_<foo>.
+// So we implement them ourselves and hook eglMakeCurrent to store the current values in TLS.
+class TLSCurrentObjects {
+public:
+    static EGLDisplay CurrentDisplay() {
+        if (auto objects = Get()) {
+            return objects->fDisplay;
+        }
+        return EGL_NO_DISPLAY;
+    }
+
+    static EGLSurface CurrentSurface(EGLint readdraw) {
+        if (auto objects = Get()) {
+            switch (readdraw) {
+                case EGL_DRAW:
+                    return objects->fDrawSurface;
+                case EGL_READ:
+                    return objects->fReadSurface;
+                default:
+                    return EGL_NO_SURFACE;
+            }
+        }
+        return EGL_NO_SURFACE;
+    }
+
+    static EGLContext CurrentContext() {
+        if (auto objects = Get()) {
+            return objects->fContext;
+        }
+        return EGL_NO_CONTEXT;
+    }
+
+    static EGLBoolean MakeCurrent(EGLDisplay display, EGLSurface draw, EGLSurface read,
+                                  EGLContext ctx) {
+        if (gfFunctionsLoadedSuccessfully && EGL_TRUE == gfMakeCurrent(display, draw, read, ctx)) {
+            if (auto objects = Get()) {
+                objects->fDisplay = display;
+                objects->fDrawSurface = draw;
+                objects->fReadSurface = read;
+                objects->fContext = ctx;
+            }
+            return EGL_TRUE;
+        }
+        return EGL_FALSE;
+
+    }
+
+private:
+    EGLDisplay fDisplay = EGL_NO_DISPLAY;
+    EGLSurface fReadSurface = EGL_NO_SURFACE;
+    EGLSurface fDrawSurface = EGL_NO_SURFACE;
+    EGLContext fContext = EGL_NO_CONTEXT;
+
+    static TLSCurrentObjects* Get() {
+        return (TLSCurrentObjects*) SkTLS::Get(TLSCreate, TLSDelete);
+    }
+    static void* TLSCreate() { return new TLSCurrentObjects(); }
+    static void TLSDelete(void* objs) { delete (TLSCurrentObjects*)objs; }
+};
+
+std::function<void()> context_restorer() {
+    if (!gfFunctionsLoadedSuccessfully) {
+        return nullptr;
+    }
+    auto display = TLSCurrentObjects::CurrentDisplay();
+    auto dsurface = TLSCurrentObjects::CurrentSurface(EGL_DRAW);
+    auto rsurface = TLSCurrentObjects::CurrentSurface(EGL_READ);
+    auto context = TLSCurrentObjects::CurrentContext();
+    return [display, dsurface, rsurface, context] {
+        TLSCurrentObjects::MakeCurrent(display, dsurface, rsurface, context);
+    };
 }
 
 }  // anonymous namespace
 
 namespace sk_gpu_test {
 
-CommandBufferGLTestContext::CommandBufferGLTestContext()
+CommandBufferGLTestContext::CommandBufferGLTestContext(CommandBufferGLTestContext* shareContext)
     : fContext(EGL_NO_CONTEXT), fDisplay(EGL_NO_DISPLAY), fSurface(EGL_NO_SURFACE) {
 
     static const EGLint configAttribs[] = {
@@ -157,36 +235,8 @@ CommandBufferGLTestContext::CommandBufferGLTestContext()
         EGL_NONE
     };
 
-    initializeGLContext(nullptr, configAttribs, surfaceAttribs);
-}
-
-CommandBufferGLTestContext::CommandBufferGLTestContext(void *nativeWindow, int msaaSampleCount) {
-    static const EGLint surfaceAttribs[] = {EGL_NONE};
-
-    EGLint configAttribs[] = {
-        EGL_RED_SIZE, 8,
-        EGL_GREEN_SIZE, 8,
-        EGL_BLUE_SIZE, 8,
-        EGL_ALPHA_SIZE, 8,
-        EGL_DEPTH_SIZE, 8,
-        EGL_STENCIL_SIZE, 8,
-        EGL_SAMPLE_BUFFERS, 1,
-        EGL_SAMPLES, msaaSampleCount,
-        EGL_NONE
-    };
-    if (msaaSampleCount == 0) {
-        configAttribs[12] = EGL_NONE;
-    }
-
-    initializeGLContext(nativeWindow, configAttribs, surfaceAttribs);
-}
-
-void CommandBufferGLTestContext::initializeGLContext(void *nativeWindow, const int *configAttribs,
-                                                 const int *surfaceAttribs) {
     load_command_buffer_once();
     if (!gfFunctionsLoadedSuccessfully) {
-        static SkOnce once;
-        once([] { SkDebugf("Command Buffer: Could not load EGL functions.\n"); });
         return;
     }
 
@@ -208,16 +258,10 @@ void CommandBufferGLTestContext::initializeGLContext(void *nativeWindow, const i
         return;
     }
 
-    if (nativeWindow) {
-        fSurface = gfCreateWindowSurface(fDisplay,
-                                         static_cast<EGLConfig>(fConfig),
-                                         (EGLNativeWindowType) nativeWindow,
-                                         surfaceAttribs);
-    } else {
-        fSurface = gfCreatePbufferSurface(fDisplay,
-                                          static_cast<EGLConfig>(fConfig),
-                                          surfaceAttribs);
-    }
+    fSurface = gfCreatePbufferSurface(fDisplay,
+                                        static_cast<EGLConfig>(fConfig),
+                                        surfaceAttribs);
+
     if (EGL_NO_SURFACE == fSurface) {
         SkDebugf("Command Buffer: Could not create EGL surface.\n");
         this->destroyGLContext();
@@ -228,21 +272,25 @@ void CommandBufferGLTestContext::initializeGLContext(void *nativeWindow, const i
         EGL_CONTEXT_CLIENT_VERSION, 2,
         EGL_NONE
     };
-    fContext = gfCreateContext(fDisplay, static_cast<EGLConfig>(fConfig), nullptr, contextAttribs);
+    EGLContext eglShareContext = shareContext
+            ? reinterpret_cast<EGLContext>(shareContext->fContext) : nullptr;
+    fContext = gfCreateContext(fDisplay, static_cast<EGLConfig>(fConfig), eglShareContext,
+                               contextAttribs);
     if (EGL_NO_CONTEXT == fContext) {
         SkDebugf("Command Buffer: Could not create EGL context.\n");
         this->destroyGLContext();
         return;
     }
 
-    if (!gfMakeCurrent(fDisplay, fSurface, fSurface, fContext)) {
+    SkScopeExit restorer(context_restorer());
+    if (!TLSCurrentObjects::MakeCurrent(fDisplay, fSurface, fSurface, fContext)) {
         SkDebugf("Command Buffer: Could not make EGL context current.\n");
         this->destroyGLContext();
         return;
     }
 
-    sk_sp<const GrGLInterface> gl(create_command_buffer_interface());
-    if (nullptr == gl.get()) {
+    auto gl = create_command_buffer_interface();
+    if (!gl) {
         SkDebugf("Command Buffer: Could not create CommandBuffer GL interface.\n");
         this->destroyGLContext();
         return;
@@ -253,7 +301,7 @@ void CommandBufferGLTestContext::initializeGLContext(void *nativeWindow, const i
         return;
     }
 
-    this->init(gl.release());
+    this->init(std::move(gl));
 }
 
 CommandBufferGLTestContext::~CommandBufferGLTestContext() {
@@ -268,15 +316,19 @@ void CommandBufferGLTestContext::destroyGLContext() {
     if (EGL_NO_DISPLAY == fDisplay) {
         return;
     }
+    bool wasCurrent = false;
     if (EGL_NO_CONTEXT != fContext) {
+        wasCurrent = (TLSCurrentObjects::CurrentContext() == fContext);
         gfDestroyContext(fDisplay, fContext);
         fContext = EGL_NO_CONTEXT;
     }
-    // Call MakeCurrent after destroying the context, so that the EGL implementation knows that
-    // the context is not used anymore after it is released from being current.  This way
-    // command buffer does not need to abandon the context before destruction, and no
-    // client-side errors are printed.
-    gfMakeCurrent(fDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    if (wasCurrent) {
+        // Call MakeCurrent after destroying the context, so that the EGL implementation knows that
+        // the context is not used anymore after it is released from being current.This way the
+        // command buffer does not need to abandon the context before destruction, and no
+        // client-side errors are printed.
+        TLSCurrentObjects::MakeCurrent(fDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    }
 
     if (EGL_NO_SURFACE != fSurface) {
         gfDestroySurface(fDisplay, fSurface);
@@ -289,9 +341,16 @@ void CommandBufferGLTestContext::onPlatformMakeCurrent() const {
     if (!gfFunctionsLoadedSuccessfully) {
         return;
     }
-    if (!gfMakeCurrent(fDisplay, fSurface, fSurface, fContext)) {
+    if (!TLSCurrentObjects::MakeCurrent(fDisplay, fSurface, fSurface, fContext)) {
         SkDebugf("Command Buffer: Could not make EGL context current.\n");
     }
+}
+
+std::function<void()> CommandBufferGLTestContext::onPlatformGetAutoContextRestore() const {
+    if (!gfFunctionsLoadedSuccessfully || TLSCurrentObjects::CurrentContext() == fContext) {
+        return nullptr;
+    }
+    return context_restorer();
 }
 
 void CommandBufferGLTestContext::onPlatformSwapBuffers() const {
@@ -319,7 +378,7 @@ void CommandBufferGLTestContext::presentCommandBuffer() {
 }
 
 bool CommandBufferGLTestContext::makeCurrent() {
-    return gfMakeCurrent(fDisplay, fSurface, fSurface, fContext) != EGL_FALSE;
+    return TLSCurrentObjects::MakeCurrent(fDisplay, fSurface, fSurface, fContext) != EGL_FALSE;
 }
 
 int CommandBufferGLTestContext::getStencilBits() {
@@ -335,3 +394,4 @@ int CommandBufferGLTestContext::getSampleCount() {
 }
 
 }  // namespace sk_gpu_test
+#endif // SK_NO_COMMAND_BUFFER

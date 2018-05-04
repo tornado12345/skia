@@ -250,13 +250,14 @@ DEF_TEST(FlattenRecordedDrawable, r) {
     // Record a set of canvas draw commands
     SkPictureRecorder recorder;
     SkCanvas* canvas = recorder.beginRecording(1000.0f, 1000.0f);
-    canvas->drawPoint(42.0f, 17.0f, SK_ColorGREEN);
     SkPaint paint;
+    paint.setColor(SK_ColorGREEN);
+    canvas->drawPoint(42.0f, 17.0f, paint);
     paint.setColor(SK_ColorRED);
     canvas->drawPaint(paint);
     SkPaint textPaint;
     textPaint.setColor(SK_ColorBLUE);
-    canvas->drawText("TEXT", 4, 467.0f, 100.0f, textPaint);
+    canvas->drawString("TEXT", 467.0f, 100.0f, textPaint);
 
     // Draw some drawables as well
     sk_sp<SkDrawable> drawable(new IntDrawable(1, 2, 3, 4));
@@ -283,3 +284,18 @@ DEF_TEST(FlattenRecordedDrawable, r) {
     REPORTER_ASSERT(r, out);
     REPORTER_ASSERT(r, !strcmp("SkRecordedDrawable", out->getTypeName()));
 }
+
+// be sure these constructs compile, don't assert, and return null
+DEF_TEST(Flattenable_EmptyDeserialze, reporter) {
+    auto data = SkData::MakeEmpty();
+
+    #define test(name)  REPORTER_ASSERT(reporter, !name::Deserialize(data->data(), data->size()))
+    test(SkPathEffect);
+    test(SkMaskFilter);
+    test(SkShaderBase); // todo: make this just be shader!
+    test(SkColorFilter);
+    test(SkImageFilter);
+    test(SkDrawLooper);
+    #undef test
+}
+

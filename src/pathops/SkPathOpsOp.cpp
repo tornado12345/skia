@@ -65,7 +65,7 @@ static SkOpSegment* findChaseOp(SkTDArray<SkOpSpanBase*>& chase, SkOpSpanBase** 
             segment = angle->segment();
             SkOpSpanBase* start = angle->start();
             SkOpSpanBase* end = angle->end();
-            int maxWinding, sumWinding, oppMaxWinding, oppSumWinding;
+            int maxWinding = 0, sumWinding = 0, oppMaxWinding = 0, oppSumWinding = 0;
             if (sortable) {
                 segment->setUpWindings(start, end, &sumMiWinding, &sumSuWinding,
                         &maxWinding, &sumWinding, &oppMaxWinding, &oppSumWinding);
@@ -178,8 +178,9 @@ static bool bridgeOp(SkOpContourHead* contourList, const SkPathOp op,
     return true;
 }
 
-// pretty picture:
-// https://docs.google.com/a/google.com/drawings/d/1sPV8rPfpEFXymBp3iSbDRWAycp1b-7vD9JP2V-kn9Ss/edit?usp=sharing
+// diagram of why this simplifcation is possible is here:
+// https://skia.org/dev/present/pathops link at bottom of the page
+// https://drive.google.com/file/d/0BwoLUwz9PYkHLWpsaXd0UDdaN00/view?usp=sharing
 static const SkPathOp gOpInverse[kReverseDifference_SkPathOp + 1][2][2] = {
 //                  inside minuend                               outside minuend
 //     inside subtrahend     outside subtrahend      inside subtrahend     outside subtrahend
@@ -204,8 +205,7 @@ static const bool gOutInverse[kReverseDifference_SkPathOp + 1][2][2] = {
 
 SK_DECLARE_STATIC_MUTEX(debugWorstLoop);
 
-SkOpGlobalState debugWorstState(nullptr, nullptr  SkDEBUGPARAMS(false) SkDEBUGPARAMS(nullptr)
-        SkDEBUGPARAMS(nullptr));
+SkOpGlobalState debugWorstState(nullptr, nullptr  SkDEBUGPARAMS(false) SkDEBUGPARAMS(nullptr));
 
 void ReportPathOpsDebugging() {
     debugWorstState.debugLoopReport();
@@ -217,13 +217,16 @@ extern void (*gVerboseFinalize)();
 
 bool OpDebug(const SkPath& one, const SkPath& two, SkPathOp op, SkPath* result
         SkDEBUGPARAMS(bool skipAssert) SkDEBUGPARAMS(const char* testName)) {
-    SkChunkAlloc allocator(4096);  // FIXME: add a constant expression here, tune
+    SkSTArenaAlloc<4096> allocator;  // FIXME: add a constant expression here, tune
     SkOpContour contour;
     SkOpContourHead* contourList = static_cast<SkOpContourHead*>(&contour);
     SkOpGlobalState globalState(contourList, &allocator
             SkDEBUGPARAMS(skipAssert) SkDEBUGPARAMS(testName));
     SkOpCoincidence coincidence(&globalState);
-#ifdef SK_DEBUG
+#if DEBUG_DUMP_VERIFY
+#ifndef SK_DEBUG
+    const char* testName = "release";
+#endif
     if (SkPathOpsDebug::gDumpOp) {
         SkPathOpsDebug::DumpOp(one, two, op, testName);
     }
@@ -316,7 +319,7 @@ bool OpDebug(const SkPath& one, const SkPath& two, SkPathOp op, SkPath* result
 }
 
 bool Op(const SkPath& one, const SkPath& two, SkPathOp op, SkPath* result) {
-#ifdef SK_DEBUG
+#if DEBUG_DUMP_VERIFY
     if (SkPathOpsDebug::gVerifyOp) {
         if (!OpDebug(one, two, op, result  SkDEBUGPARAMS(false) SkDEBUGPARAMS(nullptr))) {
             SkPathOpsDebug::ReportOpFail(one, two, op);

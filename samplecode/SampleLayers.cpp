@@ -22,9 +22,8 @@
 #include "SkTime.h"
 #include "SkTypeface.h"
 #include "SkUtils.h"
-#include "SkKey.h"
-#include "SkXfermode.h"
 #include "SkDrawFilter.h"
+#include "SkClipOpPriv.h"
 
 static void make_paint(SkPaint* paint, const SkMatrix& localMatrix) {
     SkColor colors[] = { 0, SK_ColorWHITE };
@@ -191,21 +190,6 @@ protected:
         test_fade(canvas);
     }
 
-    SkView::Click* onFindClickHandler(SkScalar x, SkScalar y, unsigned modi) override {
-        this->inval(nullptr);
-
-        return this->INHERITED::onFindClickHandler(x, y, modi);
-    }
-
-    bool onClick(Click* click) override {
-        return this->INHERITED::onClick(click);
-    }
-
-    virtual bool handleKey(SkKey) {
-        this->inval(nullptr);
-        return true;
-    }
-
 private:
     typedef SkView INHERITED;
 };
@@ -229,7 +213,7 @@ public:
     BackdropView() {
         fCenter.set(200, 150);
         fAngle = 0;
-        fImage = GetResourceAsImage("mandrill_512.png");
+        fImage = GetResourceAsImage("images/mandrill_512.png");
         fFilter = SkDilateImageFilter::Make(8, 8, nullptr);
     }
 
@@ -255,12 +239,12 @@ protected:
         m.postTranslate(fCenter.x(), fCenter.y());
         path.transform(m);
 
-        canvas->clipPath(path, SkCanvas::kIntersect_Op, true);
+        canvas->clipPath(path, kIntersect_SkClipOp, true);
         const SkRect bounds = path.getBounds();
 
         SkPaint paint;
         paint.setAlpha(0xCC);
-        canvas->saveLayer({ &bounds, &paint, fFilter.get(), 0 });
+        canvas->saveLayer({ &bounds, &paint, fFilter.get(), nullptr, nullptr, 0 });
 
         canvas->restore();
     }
@@ -271,12 +255,10 @@ protected:
     }
 
     SkView::Click* onFindClickHandler(SkScalar x, SkScalar y, unsigned modi) override {
-        this->inval(nullptr);
         return new Click(this);
     }
 
     bool onClick(Click* click) override {
-        this->inval(nullptr);
         fCenter = click->fCurr;
         return this->INHERITED::onClick(click);
     }

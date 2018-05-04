@@ -6,6 +6,7 @@
  */
 
 #include "Benchmark.h"
+#include "SkBlendModePriv.h"
 #include "SkCanvas.h"
 #include "SkPaint.h"
 
@@ -34,7 +35,7 @@ static inline SkColor start_color(ColorType ct) {
         case kChangingTransparent_ColorType:
             return 0x80A07040;
     }
-    SkFAIL("Shouldn't reach here.");
+    SK_ABORT("Shouldn't reach here.");
     return 0;
 }
 
@@ -51,9 +52,9 @@ static inline SkColor advance_color(SkColor old, ColorType ct, int step) {
         case kChangingTransparent_ColorType:
             return (0x00FFFFFF & (old + 0x00010307)) | 0x80000000;
         case kAlternatingOpaqueAndTransparent_ColorType:
-            SkFAIL("Can't get here");
+            SK_ABORT("Can't get here");
     }
-    SkFAIL("Shouldn't reach here.");
+    SK_ABORT("Shouldn't reach here.");
     return 0;
 }
 
@@ -144,7 +145,7 @@ private:
                 fName.append("_alternating_transparent_and_opaque");
                 break;
         }
-        fName.appendf("_%s", to_lower(SkXfermode::ModeName(fMode)).c_str());
+        fName.appendf("_%s", to_lower(SkBlendMode_Name(fMode)).c_str());
     }
 
     bool        fAA;

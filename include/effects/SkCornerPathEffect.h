@@ -21,13 +21,13 @@ public:
         that should be "rounded".
     */
     static sk_sp<SkPathEffect> Make(SkScalar radius) {
-        return sk_sp<SkPathEffect>(new SkCornerPathEffect(radius));
+        return radius > 0 ? sk_sp<SkPathEffect>(new SkCornerPathEffect(radius)) : nullptr;
     }
 
     virtual bool filterPath(SkPath* dst, const SkPath& src,
                             SkStrokeRec*, const SkRect*) const override;
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
     SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkCornerPathEffect)
 
 #ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
@@ -35,7 +35,7 @@ public:
 #endif
 
 protected:
-    virtual ~SkCornerPathEffect();
+    ~SkCornerPathEffect() override;
 
     explicit SkCornerPathEffect(SkScalar radius);
     void flatten(SkWriteBuffer&) const override;

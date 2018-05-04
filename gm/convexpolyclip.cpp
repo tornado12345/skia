@@ -6,6 +6,7 @@
  */
 
 #include "gm.h"
+#include "sk_tool_utils.h"
 
 #include "SkBitmap.h"
 #include "SkGradientShader.h"
@@ -58,7 +59,7 @@ static SkBitmap make_bmp(int w, int h) {
     paint.setAntiAlias(true);
     sk_tool_utils::set_portable_typeface(&paint);
     paint.setTextSize(wScalar / 2.2f);
-    paint.setShader(0);
+    paint.setShader(nullptr);
     paint.setColor(sk_tool_utils::color_to_565(SK_ColorLTGRAY));
     constexpr char kTxt[] = "Skia";
     SkPoint texPos = { wScalar / 17, hScalar / 2 + paint.getTextSize() / 2.5f };
@@ -143,7 +144,7 @@ protected:
 
         SkPaint bgPaint;
         bgPaint.setAlpha(0x15);
-        SkISize size = canvas->getDeviceSize();
+        SkISize size = canvas->getBaseLayerSize();
         canvas->drawBitmapRect(fBmp, SkRect::MakeIWH(size.fWidth, size.fHeight), &bgPaint);
 
         constexpr char kTxt[] = "Clip Me!";
@@ -173,7 +174,7 @@ protected:
                         canvas->save();
                     }
                     canvas->translate(x, y);
-                    clip->setOnCanvas(canvas, SkCanvas::kIntersect_Op, SkToBool(aa));
+                    clip->setOnCanvas(canvas, kIntersect_SkClipOp, SkToBool(aa));
                     canvas->drawBitmap(fBmp, 0, 0);
                     canvas->restore();
                     x += fBmp.width() + kMargin;
@@ -199,7 +200,7 @@ protected:
                     SkPath closedClipPath;
                     clip->asClosedPath(&closedClipPath);
                     canvas->drawPath(closedClipPath, clipOutlinePaint);
-                    clip->setOnCanvas(canvas, SkCanvas::kIntersect_Op, SkToBool(aa));
+                    clip->setOnCanvas(canvas, kIntersect_SkClipOp, SkToBool(aa));
                     canvas->scale(1.f, 1.8f);
                     canvas->drawText(kTxt, SK_ARRAY_COUNT(kTxt)-1,
                                      0, 1.5f * txtPaint.getTextSize(),
@@ -227,7 +228,7 @@ private:
 
         Clip () : fClipType(kNone_ClipType) {}
 
-        void setOnCanvas(SkCanvas* canvas, SkCanvas::ClipOp op, bool aa) const {
+        void setOnCanvas(SkCanvas* canvas, SkClipOp op, bool aa) const {
             switch (fClipType) {
                 case kPath_ClipType:
                     canvas->clipPath(fPath, op, aa);

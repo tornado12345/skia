@@ -8,9 +8,11 @@
 #include "SkData.h"
 #include "SkDataTable.h"
 #include "SkOSFile.h"
+#include "SkOSPath.h"
 #include "SkReadBuffer.h"
 #include "SkWriteBuffer.h"
 #include "SkStream.h"
+#include "SkTArray.h"
 #include "Test.h"
 
 static void test_is_equal(skiatest::Reporter* reporter,
@@ -84,32 +86,6 @@ static void test_vartable(skiatest::Reporter* reporter) {
     }
 }
 
-static void test_tablebuilder(skiatest::Reporter* reporter) {
-    const char* str[] = {
-        "", "a", "be", "see", "deigh", "ef", "ggggggggggggggggggggggggggg"
-    };
-    int count = SK_ARRAY_COUNT(str);
-
-    SkDataTableBuilder builder(16);
-
-    for (int i = 0; i < count; ++i) {
-        builder.append(str[i], strlen(str[i]) + 1);
-    }
-    sk_sp<SkDataTable> table(builder.detachDataTable());
-
-    REPORTER_ASSERT(reporter, table->count() == count);
-    for (int i = 0; i < count; ++i) {
-        size_t size;
-        REPORTER_ASSERT(reporter, table->atSize(i) == strlen(str[i]) + 1);
-        REPORTER_ASSERT(reporter, !strcmp(table->atT<const char>(i, &size),
-                                          str[i]));
-        REPORTER_ASSERT(reporter, size == strlen(str[i]) + 1);
-
-        const char* s = table->atStr(i);
-        REPORTER_ASSERT(reporter, strlen(s) == strlen(str[i]));
-    }
-}
-
 static void test_globaltable(skiatest::Reporter* reporter) {
     static const int gData[] = {
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
@@ -132,7 +108,6 @@ DEF_TEST(DataTable, reporter) {
     test_emptytable(reporter);
     test_simpletable(reporter);
     test_vartable(reporter);
-    test_tablebuilder(reporter);
     test_globaltable(reporter);
 }
 
@@ -281,16 +256,16 @@ static void check_alphabet_buffer(skiatest::Reporter* reporter, const SkROBuffer
 DEF_TEST(RWBuffer, reporter) {
     // Knowing that the default capacity is 4096, choose N large enough so we force it to use
     // multiple buffers internally.
-    const int N = 1000;
-    SkROBuffer* readers[N];
-    SkStream* streams[N];
+    static constexpr int N = 1000;
+    SkSTArray<N, sk_sp<SkROBuffer>> readers;
+    SkSTArray<N, std::unique_ptr<SkStream>> streams;
 
     {
         SkRWBuffer buffer;
         for (int i = 0; i < N; ++i) {
             buffer.append(gABC, 26);
-            readers[i] = buffer.newRBufferSnapshot();
-            streams[i] = buffer.newStreamSnapshot();
+            readers.push_back(buffer.makeROBufferSnapshot());
+            streams.push_back(buffer.makeStreamSnapshot());
         }
         REPORTER_ASSERT(reporter, N*26 == buffer.size());
     }
@@ -298,10 +273,8 @@ DEF_TEST(RWBuffer, reporter) {
     // Verify that although the SkRWBuffer's destructor has run, the readers are still valid.
     for (int i = 0; i < N; ++i) {
         REPORTER_ASSERT(reporter, (i + 1) * 26U == readers[i]->size());
-        check_alphabet_buffer(reporter, readers[i]);
-        check_alphabet_stream(reporter, streams[i]);
-        readers[i]->unref();
-        delete streams[i];
+        check_alphabet_buffer(reporter, readers[i].get());
+        check_alphabet_stream(reporter, streams[i].get());
     }
 }
 
@@ -313,8 +286,8 @@ DEF_TEST(RWBuffer_threaded, reporter) {
     SkRWBuffer buffer;
     for (int i = 0; i < N; ++i) {
         buffer.append(gABC, 26);
-        sk_sp<SkROBuffer> reader = sk_sp<SkROBuffer>(buffer.newRBufferSnapshot());
-        SkStream* stream = buffer.newStreamSnapshot();
+        sk_sp<SkROBuffer> reader = buffer.makeROBufferSnapshot();
+        SkStream* stream = buffer.makeStreamSnapshot().release();
         REPORTER_ASSERT(reporter, reader->size() == buffer.size());
         REPORTER_ASSERT(reporter, stream->getLength() == buffer.size());
 
@@ -339,7 +312,7 @@ DEF_TEST(RWBuffer_size, r) {
     SkRWBuffer buffer;
     buffer.append(gABC, 26);
 
-    sk_sp<SkROBuffer> roBuffer(buffer.newRBufferSnapshot());
+    sk_sp<SkROBuffer> roBuffer(buffer.makeROBufferSnapshot());
     SkROBuffer::Iter iter(roBuffer.get());
     REPORTER_ASSERT(r, iter.data());
     REPORTER_ASSERT(r, iter.size() == 26);
@@ -355,7 +328,7 @@ DEF_TEST(RWBuffer_noAppend, r) {
     SkRWBuffer buffer;
     REPORTER_ASSERT(r, 0 == buffer.size());
 
-    sk_sp<SkROBuffer> roBuffer = sk_sp<SkROBuffer>(buffer.newRBufferSnapshot());
+    sk_sp<SkROBuffer> roBuffer = buffer.makeROBufferSnapshot();
     REPORTER_ASSERT(r, roBuffer);
     if (roBuffer) {
         REPORTER_ASSERT(r, roBuffer->size() == 0);
@@ -365,7 +338,7 @@ DEF_TEST(RWBuffer_noAppend, r) {
         REPORTER_ASSERT(r, !iter.next());
     }
 
-    std::unique_ptr<SkStream> stream(buffer.newStreamSnapshot());
+    std::unique_ptr<SkStream> stream(buffer.makeStreamSnapshot());
     REPORTER_ASSERT(r, stream);
     if (stream) {
         REPORTER_ASSERT(r, stream->hasLength());

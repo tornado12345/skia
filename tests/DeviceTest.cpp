@@ -81,7 +81,8 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(SpecialImage_GPUDevice, reporter, ctxInfo) {
     SkImageInfo ii = SkImageInfo::MakeN32Premul(2*kWidth, 2*kHeight);
 
     sk_sp<SkBaseDevice> gpuDev(SkGpuDevice::Make(context, SkBudgeted::kNo, ii,
-                                                 0, kBottomLeft_GrSurfaceOrigin, nullptr,
+                                                 1, kBottomLeft_GrSurfaceOrigin, nullptr,
+                                                 GrMipMapped::kNo,
                                                  SkGpuDevice::kClear_InitContents));
 
     SkBitmap bm;
@@ -106,7 +107,8 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(SpecialImage_GPUDevice, reporter, ctxInfo) {
     SkASSERT(SkIRect::MakeWH(kWidth, kHeight) == special->subset());
 
     // Create a gpu-backed special image from a gpu-backed SkImage
-    image = image->makeTextureImage(context);
+    SkColorSpace* legacyColorSpace = nullptr;
+    image = image->makeTextureImage(context, legacyColorSpace);
     special = DeviceTestingAccess::MakeSpecial(gpuDev.get(), image.get());
     SkASSERT(special->isTextureBacked());
     SkASSERT(kWidth == special->width());

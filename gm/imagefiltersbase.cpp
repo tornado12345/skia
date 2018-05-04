@@ -6,9 +6,11 @@
  */
 
 #include "gm.h"
+#include "sk_tool_utils.h"
 #include "SkCanvas.h"
 #include "SkColorFilter.h"
 #include "SkColorPriv.h"
+#include "SkImageFilterPriv.h"
 #include "SkShader.h"
 
 #include "SkBlurImageFilter.h"
@@ -30,7 +32,7 @@ public:
         return sk_sp<SkImageFilter>(new FailImageFilter);
     }
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
     SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(FailImageFilter)
 
 protected:
@@ -38,6 +40,9 @@ protected:
 
     sk_sp<SkSpecialImage> onFilterImage(SkSpecialImage* source, const Context&,
                                         SkIPoint* offset) const override {
+        return nullptr;
+    }
+    sk_sp<SkImageFilter> onMakeColorSpace(SkColorSpaceXformer*) const override {
         return nullptr;
     }
 
@@ -52,12 +57,10 @@ sk_sp<SkFlattenable> FailImageFilter::CreateProc(SkReadBuffer& buffer) {
     return FailImageFilter::Make();
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void FailImageFilter::toString(SkString* str) const {
     str->appendf("FailImageFilter: (");
     str->append(")");
 }
-#endif
 
 class IdentityImageFilter : public SkImageFilter {
 public:
@@ -73,7 +76,7 @@ public:
         return sk_sp<SkImageFilter>(new IdentityImageFilter(std::move(input)));
     }
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
     SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(IdentityImageFilter)
 
 protected:
@@ -81,6 +84,9 @@ protected:
                                         SkIPoint* offset) const override {
         offset->set(0, 0);
         return sk_ref_sp<SkSpecialImage>(source);
+    }
+    sk_sp<SkImageFilter> onMakeColorSpace(SkColorSpaceXformer*) const override {
+        return sk_ref_sp(const_cast<IdentityImageFilter*>(this));
     }
 
 private:
@@ -96,12 +102,10 @@ sk_sp<SkFlattenable> IdentityImageFilter::CreateProc(SkReadBuffer& buffer) {
     return IdentityImageFilter::Make(common.getInput(0));
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void IdentityImageFilter::toString(SkString* str) const {
     str->appendf("IdentityImageFilter: (");
     str->append(")");
 }
-#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -148,7 +152,7 @@ static void draw_text(SkCanvas* canvas, const SkRect& r, sk_sp<SkImageFilter> im
     sk_tool_utils::set_portable_typeface(&paint);
     paint.setTextSize(r.height()/2);
     paint.setTextAlign(SkPaint::kCenter_Align);
-    canvas->drawText("Text", 4, r.centerX(), r.centerY(), paint);
+    canvas->drawString("Text", r.centerX(), r.centerY(), paint);
 }
 
 static void draw_bitmap(SkCanvas* canvas, const SkRect& r, sk_sp<SkImageFilter> imf) {
@@ -200,7 +204,10 @@ protected:
             IdentityImageFilter::Make(nullptr),
             FailImageFilter::Make(),
             SkColorFilterImageFilter::Make(std::move(cf), nullptr),
-            SkBlurImageFilter::Make(12.0f, 0.0f, nullptr),
+            // The strage 0.29 value tickles an edge case where crop rect calculates
+            // a small border, but the blur really needs no border. This tickels
+            // an msan uninitialized value bug.
+            SkBlurImageFilter::Make(12.0f, 0.29f, nullptr),
             SkDropShadowImageFilter::Make(
                                     10.0f, 5.0f, 3.0f, 3.0f, SK_ColorBLUE,
                                     SkDropShadowImageFilter::kDrawShadowAndForeground_ShadowMode,
@@ -264,7 +271,7 @@ protected:
         SkAutoCanvasRestore acr(canvas, true);
         for (size_t i = 0; i < SK_ARRAY_COUNT(flags); ++i) {
             paint.setFlags(flags[i]);
-            canvas->drawText("Hamburgefons", 11, 0, 0, paint);
+            canvas->drawString("Hamburgefon", 0, 0, paint);
             canvas->translate(0, 40);
         }
     }

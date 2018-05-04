@@ -6,26 +6,34 @@
  */
 
 #include "Test.h"
+#include "TestUtils.h"
 #if SK_SUPPORT_GPU
 #include "GrContext.h"
 #include "GrContextFactory.h"
+#include "GrContextPriv.h"
+#include "GrRenderTargetContext.h"
+#include "GrShaderCaps.h"
+#include "GrSurfacePriv.h"
+#include "GrTest.h"
+#include "GrTexture.h"
+#include "GrTextureContext.h"
+#include "GrTextureProxyPriv.h"
+#include "gl/GLTestContext.h"
 #include "gl/GrGLGpu.h"
 #include "gl/GrGLUtil.h"
-#include "gl/GLTestContext.h"
 
 using sk_gpu_test::GLTestContext;
 
-static void cleanup(GLTestContext* glctx0, GrGLuint texID0, GLTestContext* glctx1, GrContext* grctx1,
-                    const GrGLTextureInfo* grbackendtex1, GrEGLImage image1) {
+static void cleanup(GLTestContext* glctx0, GrGLuint texID0, GLTestContext* glctx1,
+                    sk_sp<GrContext> grctx1, GrBackendTexture* backendTex1,
+                    GrEGLImage image1) {
     if (glctx1) {
         glctx1->makeCurrent();
         if (grctx1) {
-            if (grbackendtex1) {
-                GrGLGpu* gpu1 = static_cast<GrGLGpu*>(grctx1->getGpu());
-                GrBackendObject handle = reinterpret_cast<GrBackendObject>(grbackendtex1);
-                gpu1->deleteTestingOnlyBackendTexture(handle, false);
+            if (backendTex1 && backendTex1->isValid()) {
+                GrGLGpu* gpu1 = static_cast<GrGLGpu*>(grctx1->contextPriv().getGpu());
+                gpu1->deleteTestingOnlyBackendTexture(*backendTex1);
             }
-            grctx1->unref();
         }
         if (GR_EGL_NO_IMAGE != image1) {
             glctx1->destroyEGLImage(image1);
@@ -38,48 +46,6 @@ static void cleanup(GLTestContext* glctx0, GrGLuint texID0, GLTestContext* glctx
     }
 }
 
-static void test_read_pixels(skiatest::Reporter* reporter, GrContext* context,
-                             GrTexture* externalTexture, uint32_t expectedPixelValues[]) {
-    int pixelCnt = externalTexture->width() * externalTexture->height();
-    SkAutoTMalloc<uint32_t> pixels(pixelCnt);
-    memset(pixels.get(), 0, sizeof(uint32_t)*pixelCnt);
-    bool read = externalTexture->readPixels(0, 0, externalTexture->width(),
-                                            externalTexture->height(), kRGBA_8888_GrPixelConfig,
-                                            pixels.get());
-    if (!read) {
-        ERRORF(reporter, "Error reading external texture.");
-    }
-    for (int i = 0; i < pixelCnt; ++i) {
-        if (pixels.get()[i] != expectedPixelValues[i]) {
-            ERRORF(reporter, "Error, external texture pixel value %d should be 0x%08x,"
-                             " got 0x%08x.", i, expectedPixelValues[i], pixels.get()[i]);
-            break;
-        }
-    }
-}
-
-static void test_write_pixels(skiatest::Reporter* reporter, GrContext* context,
-                              GrTexture* externalTexture) {
-    int pixelCnt = externalTexture->width() * externalTexture->height();
-    SkAutoTMalloc<uint32_t> pixels(pixelCnt);
-    memset(pixels.get(), 0, sizeof(uint32_t)*pixelCnt);
-    bool write = externalTexture->writePixels(0, 0, 0, 0, kRGBA_8888_GrPixelConfig, pixels.get());
-    REPORTER_ASSERT_MESSAGE(reporter, !write, "Should not be able to write to a EXTERNAL"
-                                              " texture.");
-}
-
-static void test_copy_surface(skiatest::Reporter* reporter, GrContext* context,
-                              GrTexture* externalTexture, uint32_t expectedPixelValues[]) {
-    GrSurfaceDesc copyDesc;
-    copyDesc.fConfig = kRGBA_8888_GrPixelConfig;
-    copyDesc.fWidth = externalTexture->width();
-    copyDesc.fHeight = externalTexture->height();
-    copyDesc.fFlags = kRenderTarget_GrSurfaceFlag;
-    sk_sp<GrTexture> copy(context->textureProvider()->createTexture(copyDesc, SkBudgeted::kYes));
-    context->copySurface(copy.get(), externalTexture);
-    test_read_pixels(reporter, context, copy.get(), expectedPixelValues);
-}
-
 DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(EGLImageTest, reporter, ctxInfo) {
     GrContext* context0 = ctxInfo.grContext();
     sk_gpu_test::GLTestContext* glCtx0 = ctxInfo.glContext();
@@ -90,8 +56,8 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(EGLImageTest, reporter, ctxInfo) {
     if (kGLES_GrGLStandard != glCtx0->gl()->fStandard) {
         return;
     }
-    GrGLGpu* gpu0 = static_cast<GrGLGpu*>(context0->getGpu());
-    if (!gpu0->glCaps().glslCaps()->externalTextureSupport()) {
+    GrGLGpu* gpu0 = static_cast<GrGLGpu*>(context0->contextPriv().getGpu());
+    if (!gpu0->glCaps().shaderCaps()->externalTextureSupport()) {
         return;
     }
 
@@ -99,20 +65,20 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(EGLImageTest, reporter, ctxInfo) {
     if (!glCtx1) {
         return;
     }
-    GrContext* context1 = GrContext::Create(kOpenGL_GrBackend, (GrBackendContext)glCtx1->gl());
-    const GrGLTextureInfo* backendTexture1 = nullptr;
+    sk_sp<GrContext> context1 = GrContext::MakeGL(sk_ref_sp(glCtx1->gl()));
+    GrBackendTexture backendTexture1;
     GrEGLImage image = GR_EGL_NO_IMAGE;
     GrGLTextureInfo externalTexture;
     externalTexture.fID = 0;
 
     if (!context1) {
-        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, backendTexture1, image);
+        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, &backendTexture1, image);
         return;
     }
 
     if (!glCtx1->gl()->hasExtension("EGL_KHR_image") ||
         !glCtx1->gl()->hasExtension("EGL_KHR_gl_texture_2D_image")) {
-        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, backendTexture1, image);
+        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, &backendTexture1, image);
         return;
     }
 
@@ -120,28 +86,43 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(EGLImageTest, reporter, ctxInfo) {
 
     // Use GL Context 1 to create a texture unknown to GrContext.
     context1->flush();
-    GrGpu* gpu1 = context1->getGpu();
+    GrGpu* gpu1 = context1->contextPriv().getGpu();
     static const int kSize = 100;
-    backendTexture1 = reinterpret_cast<const GrGLTextureInfo*>(
-        gpu1->createTestingOnlyBackendTexture(nullptr, kSize, kSize, kRGBA_8888_GrPixelConfig));
-    if (!backendTexture1 || !backendTexture1->fID) {
+    backendTexture1 =
+        gpu1->createTestingOnlyBackendTexture(nullptr, kSize, kSize, kRGBA_8888_GrPixelConfig,
+                                              false, GrMipMapped::kNo);
+
+    if (!backendTexture1.isValid() || !gpu1->isTestingOnlyBackendTexture(backendTexture1)) {
         ERRORF(reporter, "Error creating texture for EGL Image");
-        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, backendTexture1, image);
+        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, &backendTexture1, image);
         return;
     }
-    if (GR_GL_TEXTURE_2D != backendTexture1->fTarget) {
+
+    GrGLTextureInfo texInfo;
+    if (!backendTexture1.getGLTextureInfo(&texInfo)) {
+        ERRORF(reporter, "Failed to get GrGLTextureInfo");
+        return;
+    }
+
+    if (GR_GL_TEXTURE_2D != texInfo.fTarget) {
         ERRORF(reporter, "Expected backend texture to be 2D");
-        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, backendTexture1, image);
+        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, &backendTexture1, image);
         return;
     }
 
     // Wrap the texture in an EGLImage
-    image = glCtx1->texture2DToEGLImage(backendTexture1->fID);
+    image = glCtx1->texture2DToEGLImage(texInfo.fID);
     if (GR_EGL_NO_IMAGE == image) {
         ERRORF(reporter, "Error creating EGL Image from texture");
-        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, backendTexture1, image);
+        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, &backendTexture1, image);
         return;
     }
+
+    // Since we are dealing with two different GL contexts here, we need to call finish so that the
+    // clearing of the texture that happens in createTextingOnlyBackendTexture occurs before we call
+    // TexSubImage below on the other context. Otherwise, it is possible the calls get reordered and
+    // the clearing overwrites the TexSubImage writes.
+    GR_GL_CALL(glCtx1->gl(), Finish());
 
     // Populate the texture using GL context 1. Important to use TexSubImage as TexImage orphans
     // the EGL image. Also, this must be done after creating the EGLImage as the texture
@@ -151,8 +132,8 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(EGLImageTest, reporter, ctxInfo) {
         pixels.get()[i] = 0xDDAABBCC;
     }
     GR_GL_CALL(glCtx1->gl(), ActiveTexture(GR_GL_TEXTURE0));
-    GR_GL_CALL(glCtx1->gl(), BindTexture(backendTexture1->fTarget, backendTexture1->fID));
-    GR_GL_CALL(glCtx1->gl(), TexSubImage2D(backendTexture1->fTarget, 0, 0, 0, kSize, kSize,
+    GR_GL_CALL(glCtx1->gl(), BindTexture(texInfo.fTarget, texInfo.fID));
+    GR_GL_CALL(glCtx1->gl(), TexSubImage2D(texInfo.fTarget, 0, 0, 0, kSize, kSize,
                                            GR_GL_RGBA, GR_GL_UNSIGNED_BYTE, pixels.get()));
     GR_GL_CALL(glCtx1->gl(), Finish());
     // We've been making direct GL calls in GL context 1, let GrContext 1 know its internal
@@ -165,46 +146,57 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(EGLImageTest, reporter, ctxInfo) {
     glCtx0->makeCurrent();
     externalTexture.fTarget = GR_GL_TEXTURE_EXTERNAL;
     externalTexture.fID = glCtx0->eglImageToExternalTexture(image);
-
-    // Wrap this texture ID in a GrTexture
-    GrBackendTextureDesc externalDesc;
-    externalDesc.fConfig = kRGBA_8888_GrPixelConfig;
-    externalDesc.fWidth = kSize;
-    externalDesc.fHeight = kSize;
-    externalDesc.fTextureHandle = reinterpret_cast<GrBackendObject>(&externalTexture);
-    sk_sp<GrTexture> externalTextureObj(
-        context0->textureProvider()->wrapBackendTexture(externalDesc));
-    if (!externalTextureObj) {
-        ERRORF(reporter, "Error wrapping external texture in GrTexture.");
-        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, backendTexture1, image);
+    if (0 == externalTexture.fID) {
+        ERRORF(reporter, "Error converting EGL Image back to texture");
+        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, &backendTexture1, image);
         return;
     }
 
+    // Wrap this texture ID in a GrTexture
+    GrBackendTexture backendTex(kSize, kSize, kRGBA_8888_GrPixelConfig, externalTexture);
+
+    // TODO: If I make this TopLeft origin to match resolve_origin calls for kDefault, this test
+    // fails on the Nexus5. Why?
+    sk_sp<GrTextureContext> surfaceContext = context0->contextPriv().makeBackendTextureContext(
+            backendTex, kBottomLeft_GrSurfaceOrigin, nullptr);
+
+    if (!surfaceContext) {
+        ERRORF(reporter, "Error wrapping external texture in GrSurfaceContext.");
+        cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, &backendTexture1, image);
+        return;
+    }
+
+    GrTextureProxy* proxy = surfaceContext->asTextureProxy();
+    REPORTER_ASSERT(reporter, proxy->texPriv().doesNotSupportMipMaps());
+    REPORTER_ASSERT(reporter, proxy->priv().peekTexture()->surfacePriv().doesNotSupportMipMaps());
+
+    REPORTER_ASSERT(reporter, proxy->texPriv().isGLTextureRectangleOrExternal());
+    REPORTER_ASSERT(reporter,
+                    proxy->priv().peekTexture()->surfacePriv().isGLTextureRectangleOrExternal());
+    REPORTER_ASSERT(reporter, proxy->texPriv().isClampOnly());
+    REPORTER_ASSERT(reporter, proxy->priv().peekTexture()->surfacePriv().isClampOnly());
+
     // Should not be able to wrap as a RT
-    externalDesc.fFlags = kRenderTarget_GrBackendTextureFlag;
-    sk_sp<GrTexture> externalTextureRTObj(
-        context0->textureProvider()->wrapBackendTexture(externalDesc));
-    if (externalTextureRTObj) {
-        ERRORF(reporter, "Should not be able to wrap an EXTERNAL texture as a RT.");
+    {
+        sk_sp<GrRenderTargetContext> temp =
+                context0->contextPriv().makeBackendTextureRenderTargetContext(
+                        backendTex, kBottomLeft_GrSurfaceOrigin, 1, nullptr);
+        if (temp) {
+            ERRORF(reporter, "Should not be able to wrap an EXTERNAL texture as a RT.");
+        }
     }
-    externalDesc.fFlags = kNone_GrBackendTextureFlag;
 
-    // Should not be able to wrap with a sample count
-    externalDesc.fSampleCnt = 4;
-    sk_sp<GrTexture> externalTextureMSAAObj(
-        context0->textureProvider()->wrapBackendTexture(externalDesc));
-    if (externalTextureMSAAObj) {
-        ERRORF(reporter, "Should not be able to wrap an EXTERNAL texture with MSAA.");
-    }
-    externalDesc.fSampleCnt = 0;
+    test_read_pixels(reporter, surfaceContext.get(), pixels.get(), "EGLImageTest-read");
 
-    test_read_pixels(reporter, context0, externalTextureObj.get(), pixels.get());
+    // We should not be able to write to a EXTERNAL texture
+    test_write_pixels(reporter, surfaceContext.get(), false, "EGLImageTest-write");
 
-    test_write_pixels(reporter, context0, externalTextureObj.get());
+    // Only test RT-config
+    // TODO: why do we always need to draw to copy from an external texture?
+    test_copy_from_surface(reporter, context0, surfaceContext->asSurfaceProxy(),
+                           pixels.get(), true, "EGLImageTest-copy");
 
-    test_copy_surface(reporter, context0, externalTextureObj.get(), pixels.get());
-
-    cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, backendTexture1, image);
+    cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, &backendTexture1, image);
 }
 
 #endif

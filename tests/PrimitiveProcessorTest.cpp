@@ -11,67 +11,71 @@
 #include "Test.h"
 
 #if SK_SUPPORT_GPU
-#include "GrBatchFlushState.h"
-#include "GrRenderTargetContext.h"
-#include "GrRenderTargetContextPriv.h"
 #include "GrContext.h"
 #include "GrGeometryProcessor.h"
 #include "GrGpu.h"
-#include "GrTextureProvider.h"
-#include "glsl/GrGLSLGeometryProcessor.h"
-#include "glsl/GrGLSLFragmentShaderBuilder.h"
-#include "glsl/GrGLSLVarying.h"
-#include "batches/GrVertexBatch.h"
+#include "GrOpFlushState.h"
+#include "GrRenderTargetContext.h"
+#include "GrRenderTargetContextPriv.h"
+#include "SkPointPriv.h"
 #include "SkString.h"
+#include "glsl/GrGLSLFragmentShaderBuilder.h"
+#include "glsl/GrGLSLGeometryProcessor.h"
+#include "glsl/GrGLSLVarying.h"
+#include "ops/GrMeshDrawOp.h"
 
 namespace {
-class Batch : public GrVertexBatch {
+class Op : public GrMeshDrawOp {
 public:
-    DEFINE_BATCH_CLASS_ID
+    DEFINE_OP_CLASS_ID
 
-    const char* name() const override { return "Dummy Batch"; }
-    void computePipelineOptimizations(GrInitInvariantOutput* color,
-                                      GrInitInvariantOutput* coverage,
-                                      GrBatchToXPOverrides* overrides) const override {
-        color->setUnknownFourComponents();
-        coverage->setUnknownSingleComponent();
+    const char* name() const override { return "Dummy Op"; }
+
+    static std::unique_ptr<GrDrawOp> Make(int numAttribs) {
+        return std::unique_ptr<GrDrawOp>(new Op(numAttribs));
     }
 
-    void initBatchTracker(const GrXPOverridesForBatch& overrides) override {}
+    FixedFunctionFlags fixedFunctionFlags() const override {
+        return FixedFunctionFlags::kNone;
+    }
 
-    Batch(int numAttribs)
-        : INHERITED(ClassID())
-        , fNumAttribs(numAttribs) {
-        this->setBounds(SkRect::MakeWH(1.f, 1.f), HasAABloat::kNo, IsZeroArea::kNo);
+    RequiresDstTexture finalize(const GrCaps&, const GrAppliedClip*,\
+                                GrPixelConfigIsClamped) override {
+        return RequiresDstTexture::kNo;
     }
 
 private:
-    bool onCombineIfPossible(GrBatch*, const GrCaps&) override { return false; }
-    void onPrepareDraws(Target* target) const override {
+    Op(int numAttribs) : INHERITED(ClassID()), fNumAttribs(numAttribs) {
+        this->setBounds(SkRect::MakeWH(1.f, 1.f), HasAABloat::kNo, IsZeroArea::kNo);
+    }
+
+    bool onCombineIfPossible(GrOp*, const GrCaps&) override { return false; }
+
+    void onPrepareDraws(Target* target) override {
         class GP : public GrGeometryProcessor {
         public:
-            GP(int numAttribs) {
-                this->initClassID<GP>();
+            GP(int numAttribs)
+            : INHERITED(kGP_ClassID) {
                 SkASSERT(numAttribs > 1);
                 for (auto i = 0; i < numAttribs; ++i) {
                     fAttribNames.push_back().printf("attr%d", i);
                 }
                 for (auto i = 0; i < numAttribs; ++i) {
-                    this->addVertexAttrib(fAttribNames[i].c_str(), kVec2f_GrVertexAttribType);
+                    this->addVertexAttrib(fAttribNames[i].c_str(), kFloat2_GrVertexAttribType);
                 }
             }
             const char* name() const override { return "Dummy GP"; }
 
-            GrGLSLPrimitiveProcessor* createGLSLInstance(const GrGLSLCaps&) const override {
+            GrGLSLPrimitiveProcessor* createGLSLInstance(const GrShaderCaps&) const override {
                 class GLSLGP : public GrGLSLGeometryProcessor {
                 public:
                     void onEmitCode(EmitArgs& args, GrGPArgs* gpArgs) override {
                         const GP& gp = args.fGP.cast<GP>();
                         args.fVaryingHandler->emitAttributes(gp);
-                        this->setupPosition(args.fVertBuilder, gpArgs, gp.fAttribs[0].fName);
-                        GrGLSLPPFragmentBuilder* fragBuilder = args.fFragBuilder;
-                        fragBuilder->codeAppendf("%s = vec4(1);", args.fOutputColor);
-                        fragBuilder->codeAppendf("%s = vec4(1);", args.fOutputCoverage);
+                        this->writeOutputPosition(args.fVertBuilder, gpArgs, gp.getAttrib(0).fName);
+                        GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
+                        fragBuilder->codeAppendf("%s = half4(1);", args.fOutputColor);
+                        fragBuilder->codeAppendf("%s = half4(1);", args.fOutputCoverage);
                     }
                     void setData(const GrGLSLProgramDataManager& pdman,
                                  const GrPrimitiveProcessor& primProc,
@@ -79,35 +83,42 @@ private:
                 };
                 return new GLSLGP();
             }
-            void getGLSLProcessorKey(const GrGLSLCaps&,
+            void getGLSLProcessorKey(const GrShaderCaps&,
                                      GrProcessorKeyBuilder* builder) const override {
                 builder->add32(this->numAttribs());
             }
 
         private:
             SkTArray<SkString> fAttribNames;
+
+            typedef GrGeometryProcessor INHERITED;
         };
         sk_sp<GrGeometryProcessor> gp(new GP(fNumAttribs));
         QuadHelper helper;
         size_t vertexStride = gp->getVertexStride();
         SkPoint* vertices = reinterpret_cast<SkPoint*>(helper.init(target, vertexStride, 1));
-        vertices->setRectFan(0.f, 0.f, 1.f, 1.f, vertexStride);
-        helper.recordDraw(target, gp.get());
+        SkPointPriv::SetRectTriStrip(vertices, 0.f, 0.f, 1.f, 1.f, vertexStride);
+        helper.recordDraw(target, gp.get(),
+                          target->makePipeline(0, GrProcessorSet::MakeEmptySet(),
+                                               target->detachAppliedClip()));
     }
 
     int fNumAttribs;
 
-    typedef GrVertexBatch INHERITED;
+    typedef GrMeshDrawOp INHERITED;
 };
 }
 
 DEF_GPUTEST_FOR_ALL_CONTEXTS(VertexAttributeCount, reporter, ctxInfo) {
     GrContext* context = ctxInfo.grContext();
+#if GR_GPU_STATS
+    GrGpu* gpu = context->contextPriv().getGpu();
+#endif
 
-    sk_sp<GrRenderTargetContext> renderTargetContext(context->makeRenderTargetContext(
-                                                                     SkBackingFit::kApprox,
-                                                                     1, 1, kRGBA_8888_GrPixelConfig,
-                                                                     nullptr));
+    sk_sp<GrRenderTargetContext> renderTargetContext(
+            context->contextPriv().makeDeferredRenderTargetContext(SkBackingFit::kApprox,
+                                                                   1, 1, kRGBA_8888_GrPixelConfig,
+                                                                   nullptr));
     if (!renderTargetContext) {
         ERRORF(reporter, "Could not create render target context.");
         return;
@@ -118,29 +129,28 @@ DEF_GPUTEST_FOR_ALL_CONTEXTS(VertexAttributeCount, reporter, ctxInfo) {
         return;
     }
     context->flush();
-    context->resetGpuStats();
+    context->contextPriv().resetGpuStats();
 #if GR_GPU_STATS
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numDraws() == 0);
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numFailedDraws() == 0);
+    REPORTER_ASSERT(reporter, gpu->stats()->numDraws() == 0);
+    REPORTER_ASSERT(reporter, gpu->stats()->numFailedDraws() == 0);
 #endif
-    sk_sp<GrDrawBatch> batch;
+    // Adding discard to appease vulkan validation warning about loading uninitialized data on draw
+    renderTargetContext->discard();
+
     GrPaint grPaint;
     // This one should succeed.
-    batch.reset(new Batch(attribCnt));
-    renderTargetContext->priv().testingOnly_drawBatch(grPaint, batch.get());
+    renderTargetContext->priv().testingOnly_addDrawOp(Op::Make(attribCnt));
     context->flush();
 #if GR_GPU_STATS
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numDraws() == 1);
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numFailedDraws() == 0);
+    REPORTER_ASSERT(reporter, gpu->stats()->numDraws() == 1);
+    REPORTER_ASSERT(reporter, gpu->stats()->numFailedDraws() == 0);
 #endif
-    context->resetGpuStats();
-    // This one should fail.
-    batch.reset(new Batch(attribCnt+1));
-    renderTargetContext->priv().testingOnly_drawBatch(grPaint, batch.get());
+    context->contextPriv().resetGpuStats();
+    renderTargetContext->priv().testingOnly_addDrawOp(Op::Make(attribCnt + 1));
     context->flush();
 #if GR_GPU_STATS
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numDraws() == 0);
-    REPORTER_ASSERT(reporter, context->getGpu()->stats()->numFailedDraws() == 1);
+    REPORTER_ASSERT(reporter, gpu->stats()->numDraws() == 0);
+    REPORTER_ASSERT(reporter, gpu->stats()->numFailedDraws() == 1);
 #endif
 }
 #endif

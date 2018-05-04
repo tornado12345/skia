@@ -5,6 +5,8 @@
  * found in the LICENSE file.
  */
 
+#include "SkColorSpaceXformer.h"
+#include "SkImageFilterPriv.h"
 #include "SkLocalMatrixImageFilter.h"
 #include "SkReadBuffer.h"
 #include "SkSpecialImage.h"
@@ -55,9 +57,18 @@ SkIRect SkLocalMatrixImageFilter::onFilterBounds(const SkIRect& src, const SkMat
     return this->getInput(0)->filterBounds(src, SkMatrix::Concat(matrix, fLocalM), direction);
 }
 
-#ifndef SK_IGNORE_TO_STRING
+sk_sp<SkImageFilter> SkLocalMatrixImageFilter::onMakeColorSpace(SkColorSpaceXformer* xformer)
+const {
+    SkASSERT(1 == this->countInputs() && this->getInput(0));
+
+    auto input = xformer->apply(this->getInput(0));
+    if (input.get() != this->getInput(0)) {
+        return SkLocalMatrixImageFilter::Make(fLocalM, std::move(input));
+    }
+    return this->refMe();
+}
+
 void SkLocalMatrixImageFilter::toString(SkString* str) const {
     str->append("SkLocalMatrixImageFilter: (");
     str->append(")");
 }
-#endif

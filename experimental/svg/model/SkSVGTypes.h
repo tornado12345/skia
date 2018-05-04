@@ -10,6 +10,7 @@
 
 #include "SkColor.h"
 #include "SkMatrix.h"
+#include "SkPath.h"
 #include "SkPoint.h"
 #include "SkRect.h"
 #include "SkScalar.h"
@@ -119,6 +120,34 @@ private:
     SkString       fIRI;
 };
 
+class SkSVGClip {
+public:
+    enum class Type {
+        kNone,
+        kInherit,
+        kIRI,
+    };
+
+    SkSVGClip() : fType(Type::kNone) {}
+    explicit SkSVGClip(Type t) : fType(t)           {}
+    explicit SkSVGClip(const SkString& iri) : fType(Type::kIRI), fIRI(iri) {}
+
+    SkSVGClip(const SkSVGClip&)            = default;
+    SkSVGClip& operator=(const SkSVGClip&) = default;
+
+    bool operator==(const SkSVGClip& other) const {
+        return fType == other.fType && fIRI == other.fIRI;
+    }
+    bool operator!=(const SkSVGClip& other) const { return !(*this == other); }
+
+    Type type() const { return fType; }
+    const SkString& iri() const { SkASSERT(fType == Type::kIRI); return fIRI; }
+
+private:
+    Type           fType;
+    SkString       fIRI;
+};
+
 class SkSVGLineCap {
 public:
     enum class Type {
@@ -189,6 +218,89 @@ public:
 
 private:
     Type fType;
+};
+
+class SkSVGFillRule {
+public:
+    enum class Type {
+        kNonZero,
+        kEvenOdd,
+        kInherit,
+    };
+
+    constexpr SkSVGFillRule() : fType(Type::kInherit) {}
+    constexpr explicit SkSVGFillRule(Type t) : fType(t) {}
+
+    SkSVGFillRule(const SkSVGFillRule&)            = default;
+    SkSVGFillRule& operator=(const SkSVGFillRule&) = default;
+
+    bool operator==(const SkSVGFillRule& other) const { return fType == other.fType; }
+    bool operator!=(const SkSVGFillRule& other) const { return !(*this == other); }
+
+    Type type() const { return fType; }
+
+    SkPath::FillType asFillType() const {
+        SkASSERT(fType != Type::kInherit); // should never be called for unresolved values.
+        return fType == Type::kEvenOdd ? SkPath::kEvenOdd_FillType : SkPath::kWinding_FillType;
+    }
+
+private:
+    Type fType;
+};
+
+class SkSVGVisibility {
+public:
+    enum class Type {
+        kVisible,
+        kHidden,
+        kCollapse,
+        kInherit,
+    };
+
+    constexpr SkSVGVisibility() : fType(Type::kVisible) {}
+    constexpr explicit SkSVGVisibility(Type t) : fType(t) {}
+
+    SkSVGVisibility(const SkSVGVisibility&)            = default;
+    SkSVGVisibility& operator=(const SkSVGVisibility&) = default;
+
+    bool operator==(const SkSVGVisibility& other) const { return fType == other.fType; }
+    bool operator!=(const SkSVGVisibility& other) const { return !(*this == other); }
+
+    Type type() const { return fType; }
+
+private:
+    Type fType;
+};
+
+class SkSVGDashArray {
+public:
+    enum class Type {
+        kNone,
+        kDashArray,
+        kInherit,
+    };
+
+    SkSVGDashArray()                : fType(Type::kNone) {}
+    explicit SkSVGDashArray(Type t) : fType(t) {}
+    explicit SkSVGDashArray(SkTDArray<SkSVGLength>&& dashArray)
+        : fType(Type::kDashArray)
+        , fDashArray(std::move(dashArray)) {}
+
+    SkSVGDashArray(const SkSVGDashArray&)            = default;
+    SkSVGDashArray& operator=(const SkSVGDashArray&) = default;
+
+    bool operator==(const SkSVGDashArray& other) const {
+        return fType == other.fType && fDashArray == other.fDashArray;
+    }
+    bool operator!=(const SkSVGDashArray& other) const { return !(*this == other); }
+
+    Type type() const { return fType; }
+
+    const SkTDArray<SkSVGLength>& dashArray() const { return fDashArray; }
+
+private:
+    Type fType;
+    SkTDArray<SkSVGLength> fDashArray;
 };
 
 #endif // SkSVGTypes_DEFINED

@@ -4,13 +4,13 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
+
 #include "SampleCode.h"
 #include "SkView.h"
 #include "SkCanvas.h"
-#include "SkBlurMaskFilter.h"
+#include "SkMaskFilter.h"
 #include "SkPaint.h"
 #include "SkPath.h"
-#include "SkXfermode.h"
 #include "SkMatrix.h"
 #include "SkColor.h"
 #include "SkRandom.h"
@@ -189,7 +189,7 @@ static void do_fuzz(SkCanvas* canvas) {
 
     case 7:
       if (quick == true) break;
-      paint.setMaskFilter(SkBlurMaskFilter::Make(kNormal_SkBlurStyle, make_number()));
+      paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, make_number()));
       break;
 
     case 8:
@@ -381,7 +381,6 @@ protected:
 
     virtual void onDrawContent(SkCanvas* canvas) {
         do_fuzz(canvas);
-        this->inval(nullptr);
     }
 
 private:

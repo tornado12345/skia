@@ -8,16 +8,16 @@ infrastructure.
 <img src=Perf.png style="margin-left:30px" align="left" width="800"/> <br clear="left">
 
 Skia tests across a large number of platforms and configurations, and each
-commit to Skia generates 240,000 individual values are sent to Perf,
+commit to Skia generates 240,000 individual values that are sent to Perf,
 consisting mostly of performance benchmark results, but also including memory
 and coverage data.
 
 Perf includes tools for analyzing such a large corpus of data, the most
-powerful is [k-means clustering](https://perf.skia.org/clusters/). This tools
-groups large sets of performance metrics together based on how they change
-over time, and highlights sets of metrics that have performance regressions.
+powerful is [k-means clustering](https://perf.skia.org/t/). This tool groups
+large sets of performance metrics together based on how they change over time,
+and highlights sets of metrics that have performance regressions.
 
-<img src=Cluster.png style="margin-left:30px" align="left" width="800"/> <br clear="left">
+<img src=Cluster.png style="margin-left:30px" align="left" width="500"/> <br clear="left">
 
 Calculations
 ------------

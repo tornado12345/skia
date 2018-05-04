@@ -26,9 +26,18 @@ static unsigned char gGIFData[] = {
 };
 
 static unsigned char gGIFDataNoColormap[] = {
-  0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
-  0x21, 0xf9, 0x04, 0x01, 0x0a, 0x00, 0x01, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00,
-  0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x4c, 0x01, 0x00, 0x3b
+  // Header
+  0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
+  // Screen descriptor
+  0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+  // Graphics control extension
+  0x21, 0xf9, 0x04, 0x01, 0x0a, 0x00, 0x01, 0x00,
+  // Image descriptor
+  0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+  // Image data
+  0x02, 0x02, 0x4c, 0x01, 0x00,
+  // Trailer
+  0x3b
 };
 
 static unsigned char gInterlacedGIF[] = {
@@ -177,7 +186,32 @@ DEF_TEST(Gif, reporter) {
 
     test_gif_data_no_colormap(reporter, static_cast<void *>(gGIFDataNoColormap),
                               sizeof(gGIFDataNoColormap));
-    // "libgif warning [missing colormap]"
+
+    // Since there is no color map, we do not even need to parse the image data
+    // to know that we should draw transparent. Truncate the file before the
+    // data. This should still succeed.
+    test_gif_data_no_colormap(reporter, static_cast<void *>(gGIFDataNoColormap), 31);
+
+    // Likewise, incremental decoding should succeed here.
+    {
+        sk_sp<SkData> data = SkData::MakeWithoutCopy(gGIFDataNoColormap, 31);
+        std::unique_ptr<SkCodec> codec(SkCodec::MakeFromData(data));
+        REPORTER_ASSERT(reporter, codec);
+        if (codec) {
+            auto info = codec->getInfo().makeColorType(kN32_SkColorType);
+            SkBitmap bm;
+            bm.allocPixels(info);
+            REPORTER_ASSERT(reporter, SkCodec::kSuccess == codec->startIncrementalDecode(
+                    info, bm.getPixels(), bm.rowBytes()));
+            REPORTER_ASSERT(reporter, SkCodec::kSuccess == codec->incrementalDecode());
+            REPORTER_ASSERT(reporter, bm.width() == 1);
+            REPORTER_ASSERT(reporter, bm.height() == 1);
+            REPORTER_ASSERT(reporter, !(bm.empty()));
+            if (!(bm.empty())) {
+                REPORTER_ASSERT(reporter, bm.getColor(0, 0) == 0x00000000);
+            }
+        }
+    }
 
     // test short Gif.  80 is missing a few bytes.
     test_gif_data_short(reporter, static_cast<void *>(gGIFData), 80);
@@ -191,39 +225,59 @@ DEF_TEST(Gif, reporter) {
 // Regression test for decoding a gif image with sampleSize of 4, which was
 // previously crashing.
 DEF_TEST(Gif_Sampled, r) {
-    std::unique_ptr<SkFILEStream> stream(
-            new SkFILEStream(GetResourcePath("test640x479.gif").c_str()));
-    REPORTER_ASSERT(r, stream->isValid());
-    if (!stream->isValid()) {
+    auto data = GetResourceAsData("images/test640x479.gif");
+    REPORTER_ASSERT(r, data);
+    if (!data) {
         return;
     }
-
-    std::unique_ptr<SkAndroidCodec> codec(SkAndroidCodec::NewFromStream(stream.release()));
+    std::unique_ptr<SkStreamAsset> stream(new SkMemoryStream(std::move(data)));
+    std::unique_ptr<SkAndroidCodec> codec(SkAndroidCodec::MakeFromStream(std::move(stream)));
     REPORTER_ASSERT(r, codec);
     if (!codec) {
         return;
     }
 
-    // Construct a color table for the decode if necessary
-    sk_sp<SkColorTable> colorTable(nullptr);
-    SkPMColor* colorPtr = nullptr;
-    int* colorCountPtr = nullptr;
-    int maxColors = 256;
-    if (kIndex_8_SkColorType == codec->getInfo().colorType()) {
-        SkPMColor colors[256];
-        colorTable.reset(new SkColorTable(colors, maxColors));
-        colorPtr = const_cast<SkPMColor*>(colorTable->readColors());
-        colorCountPtr = &maxColors;
-    }
-
     SkAndroidCodec::AndroidOptions options;
     options.fSampleSize = 4;
-    options.fColorPtr = colorPtr;
-    options.fColorCount = colorCountPtr;
 
     SkBitmap bm;
-    bm.allocPixels(codec->getInfo(), nullptr, colorTable.get());
+    bm.allocPixels(codec->getInfo());
     const SkCodec::Result result = codec->getAndroidPixels(codec->getInfo(), bm.getPixels(),
             bm.rowBytes(), &options);
     REPORTER_ASSERT(r, result == SkCodec::kSuccess);
+}
+
+// If a GIF file is truncated before the header for the first image is defined,
+// we should not create an SkCodec.
+DEF_TEST(Codec_GifTruncated, r) {
+    sk_sp<SkData> data(GetResourceAsData("images/test640x479.gif"));
+    if (!data) {
+        return;
+    }
+
+    // This is right before the header for the first image.
+    data = SkData::MakeSubset(data.get(), 0, 446);
+    std::unique_ptr<SkCodec> codec(SkCodec::MakeFromData(data));
+    REPORTER_ASSERT(r, !codec);
+}
+
+DEF_TEST(Codec_GifTruncated2, r) {
+    sk_sp<SkData> data(GetResourceAsData("images/box.gif"));
+    if (!data) {
+        return;
+    }
+
+    // This is after the header, but before the color table.
+    data = SkData::MakeSubset(data.get(), 0, 23);
+    std::unique_ptr<SkCodec> codec(SkCodec::MakeFromData(data));
+    if (!codec) {
+        ERRORF(r, "Failed to create codec with partial data");
+        return;
+    }
+
+    // Although we correctly created a codec, no frame is
+    // complete enough that it has its metadata. Returning 0
+    // ensures that Chromium will not try to create a frame
+    // too early.
+    REPORTER_ASSERT(r, codec->getFrameCount() == 0);
 }

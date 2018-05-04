@@ -4,18 +4,18 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
+
 #include "SampleCode.h"
 #include "SkBlurMask.h"
-#include "SkBlurMaskFilter.h"
 #include "SkCanvas.h"
 #include "SkGradientShader.h"
 #include "SkGraphics.h"
+#include "SkMaskFilter.h"
 #include "SkPath.h"
 #include "SkRandom.h"
 #include "SkRegion.h"
 #include "SkShader.h"
 #include "SkUtils.h"
-#include "SkXfermode.h"
 #include "SkColorPriv.h"
 #include "SkColorFilter.h"
 #include "SkTime.h"
@@ -51,7 +51,7 @@ protected:
 
         paint.setARGB(fByte, 0xFF, 0xFF, 0xFF);
 
-        paint.setMaskFilter(SkBlurMaskFilter::Make(kNormal_SkBlurStyle,
+        paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle,
                                                    SkBlurMask::ConvertRadiusToSigma(3)));
 
         SkRandom rand;
@@ -60,7 +60,7 @@ protected:
             paint.setColor(rand.nextU() | (0xFF << 24));
             paint.setTextSize(SkIntToScalar(ps));
             paint.setTextSize(SkIntToScalar(24));
-            canvas->drawText(str, strlen(str), x, y, paint);
+            canvas->drawString(str, x, y, paint);
             y += paint.getFontMetrics(nullptr);
         }
     }
@@ -77,7 +77,6 @@ protected:
             y = 255;
         }
         fByte = y;
-        this->inval(nullptr);
         return true;
     }
 

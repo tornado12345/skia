@@ -14,18 +14,20 @@
 #include "SkMatrixImageFilter.h"
 #include "SkReadBuffer.h"
 #include "SkRect.h"
+#include "SkSafe32.h"
 #include "SkSpecialImage.h"
 #include "SkSpecialSurface.h"
 #include "SkValidationUtils.h"
 #include "SkWriteBuffer.h"
 #if SK_SUPPORT_GPU
+#include "GrColorSpaceXform.h"
 #include "GrContext.h"
-#include "GrRenderTargetContext.h"
 #include "GrFixedClip.h"
-#include "SkGrPriv.h"
+#include "GrRenderTargetContext.h"
+#include "GrTextureProxy.h"
+#include "SkGr.h"
 #endif
 
-#ifndef SK_IGNORE_TO_STRING
 void SkImageFilter::CropRect::toString(SkString* str) const {
     if (!fFlags) {
         return;
@@ -54,7 +56,6 @@ void SkImageFilter::CropRect::toString(SkString* str) const {
     }
     str->appendf(") ");
 }
-#endif
 
 void SkImageFilter::CropRect::applyTo(const SkIRect& imageBounds,
                                       const SkMatrix& ctm,
@@ -72,14 +73,14 @@ void SkImageFilter::CropRect::applyTo(const SkIRect& imageBounds,
                 cropped->fLeft = devICropR.fLeft;
             }
         } else {
-            devICropR.fRight = cropped->fLeft + devICropR.width();
+            devICropR.fRight = Sk32_sat_add(cropped->fLeft, devICropR.width());
         }
         if (fFlags & kHasTop_CropEdge) {
             if (embiggen || devICropR.fTop > cropped->fTop) {
                 cropped->fTop = devICropR.fTop;
             }
         } else {
-            devICropR.fBottom = cropped->fTop + devICropR.height();
+            devICropR.fBottom = Sk32_sat_add(cropped->fTop, devICropR.height());
         }
         if (fFlags & kHasWidth_CropEdge) {
             if (embiggen || devICropR.fRight < cropped->fRight) {
@@ -120,7 +121,6 @@ bool SkImageFilter::Common::unflatten(SkReadBuffer& buffer, int expectedCount) {
         return false;
     }
 
-    SkFUZZF(("allocInputs: %d\n", count));
     this->allocInputs(count);
     for (int i = 0; i < count; i++) {
         if (buffer.readBool()) {
@@ -138,16 +138,12 @@ bool SkImageFilter::Common::unflatten(SkReadBuffer& buffer, int expectedCount) {
 
     uint32_t flags = buffer.readUInt();
     fCropRect = CropRect(rect, flags);
-    if (buffer.isVersionLT(SkReadBuffer::kImageFilterNoUniqueID_Version)) {
-
-        (void) buffer.readUInt();
-    }
     return buffer.isValid();
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-void SkImageFilter::init(sk_sp<SkImageFilter>* inputs,
+void SkImageFilter::init(sk_sp<SkImageFilter> const* inputs,
                          int inputCount,
                          const CropRect* cropRect) {
     fCropRect = cropRect ? *cropRect : CropRect(SkRect(), 0x0);
@@ -162,7 +158,7 @@ void SkImageFilter::init(sk_sp<SkImageFilter>* inputs,
     }
 }
 
-SkImageFilter::SkImageFilter(sk_sp<SkImageFilter>* inputs,
+SkImageFilter::SkImageFilter(sk_sp<SkImageFilter> const* inputs,
                              int inputCount,
                              const CropRect* cropRect)
     : fUsesSrcInput(false)
@@ -171,7 +167,7 @@ SkImageFilter::SkImageFilter(sk_sp<SkImageFilter>* inputs,
 }
 
 SkImageFilter::~SkImageFilter() {
-    SkImageFilterCache::Get()->purgeByKeys(fCacheKeys.begin(), fCacheKeys.count());
+    SkImageFilterCache::Get()->purgeByImageFilter(this);
 }
 
 SkImageFilter::SkImageFilter(int inputCount, SkReadBuffer& buffer)
@@ -200,14 +196,17 @@ void SkImageFilter::flatten(SkWriteBuffer& buffer) const {
 sk_sp<SkSpecialImage> SkImageFilter::filterImage(SkSpecialImage* src, const Context& context,
                                                  SkIPoint* offset) const {
     SkASSERT(src && offset);
+    if (!context.isValid()) {
+        return nullptr;
+    }
 
     uint32_t srcGenID = fUsesSrcInput ? src->uniqueID() : 0;
     const SkIRect srcSubset = fUsesSrcInput ? src->subset() : SkIRect::MakeWH(0, 0);
     SkImageFilterCacheKey key(fUniqueID, context.ctm(), context.clipBounds(), srcGenID, srcSubset);
     if (context.cache()) {
-        SkSpecialImage* result = context.cache()->get(key, offset);
+        sk_sp<SkSpecialImage> result = context.cache()->get(key, offset);
         if (result) {
-            return sk_sp<SkSpecialImage>(SkRef(result));
+            return result;
         }
     }
 
@@ -223,9 +222,7 @@ sk_sp<SkSpecialImage> SkImageFilter::filterImage(SkSpecialImage* src, const Cont
 #endif
 
     if (result && context.cache()) {
-        context.cache()->set(key, result.get(), *offset);
-        SkAutoMutexAcquire mutex(fMutex);
-        fCacheKeys.push_back(key);
+        context.cache()->set(key, result.get(), *offset, this);
     }
 
     return result;
@@ -276,7 +273,7 @@ bool SkImageFilter::canComputeFastBounds() const {
 
 #if SK_SUPPORT_GPU
 sk_sp<SkSpecialImage> SkImageFilter::DrawWithFP(GrContext* context,
-                                                sk_sp<GrFragmentProcessor> fp,
+                                                std::unique_ptr<GrFragmentProcessor> fp,
                                                 const SkIRect& bounds,
                                                 const OutputProperties& outputProperties) {
     GrPaint paint;
@@ -285,22 +282,26 @@ sk_sp<SkSpecialImage> SkImageFilter::DrawWithFP(GrContext* context,
 
     sk_sp<SkColorSpace> colorSpace = sk_ref_sp(outputProperties.colorSpace());
     GrPixelConfig config = GrRenderableConfigForColorSpace(colorSpace.get());
-    sk_sp<GrRenderTargetContext> renderTargetContext(context->makeRenderTargetContext(
-        SkBackingFit::kApprox, bounds.width(), bounds.height(), config, std::move(colorSpace)));
+    sk_sp<GrRenderTargetContext> renderTargetContext(
+        context->contextPriv().makeDeferredRenderTargetContext(
+                                SkBackingFit::kApprox, bounds.width(), bounds.height(),
+                                config, std::move(colorSpace)));
     if (!renderTargetContext) {
         return nullptr;
     }
-    paint.setGammaCorrect(renderTargetContext->isGammaCorrect());
+    paint.setGammaCorrect(renderTargetContext->colorSpaceInfo().isGammaCorrect());
 
     SkIRect dstIRect = SkIRect::MakeWH(bounds.width(), bounds.height());
     SkRect srcRect = SkRect::Make(bounds);
     SkRect dstRect = SkRect::MakeWH(srcRect.width(), srcRect.height());
     GrFixedClip clip(dstIRect);
-    renderTargetContext->fillRectToRect(clip, paint, SkMatrix::I(), dstRect, srcRect);
+    renderTargetContext->fillRectToRect(clip, std::move(paint), GrAA::kNo, SkMatrix::I(), dstRect,
+                                        srcRect);
 
-    return SkSpecialImage::MakeFromGpu(dstIRect, kNeedNewImageUniqueID_SpecialImage,
-                                       renderTargetContext->asTexture(),
-                                       sk_ref_sp(renderTargetContext->getColorSpace()));
+    return SkSpecialImage::MakeDeferredFromGpu(
+            context, dstIRect, kNeedNewImageUniqueID_SpecialImage,
+            renderTargetContext->asTextureProxyRef(),
+            renderTargetContext->colorSpaceInfo().refColorSpace());
 }
 #endif
 
@@ -341,6 +342,40 @@ bool SkImageFilter::applyCropRect(const Context& ctx, const SkIRect& srcBounds,
     // at the full crop rect size in every tile.
     return dstBounds->intersect(ctx.clipBounds());
 }
+
+#if SK_SUPPORT_GPU
+sk_sp<SkSpecialImage> SkImageFilter::ImageToColorSpace(SkSpecialImage* src,
+                                                       const OutputProperties& outProps) {
+    // There are several conditions that determine if we actually need to convert the source to the
+    // destination's color space. Rather than duplicate that logic here, just try to make an xform
+    // object. If that produces something, then both are tagged, and the source is in a different
+    // gamut than the dest. There is some overhead to making the xform, but those are cached, and
+    // if we get one back, that means we're about to use it during the conversion anyway.
+    //
+    // TODO: Fix this check, to handle wider support of transfer functions, config mismatch, etc.
+    // For now, continue to just check if gamut is different, which may not be sufficient.
+    auto colorSpaceXform = GrColorSpaceXform::MakeGamutXform(src->getColorSpace(),
+                                                             outProps.colorSpace());
+
+    if (!colorSpaceXform) {
+        // No xform needed, just return the original image
+        return sk_ref_sp(src);
+    }
+
+    sk_sp<SkSpecialSurface> surf(src->makeSurface(outProps,
+                                                  SkISize::Make(src->width(), src->height())));
+    if (!surf) {
+        return sk_ref_sp(src);
+    }
+
+    SkCanvas* canvas = surf->getCanvas();
+    SkASSERT(canvas);
+    SkPaint p;
+    p.setBlendMode(SkBlendMode::kSrc);
+    src->draw(canvas, 0, 0, &p);
+    return surf->makeImageSnapshot();
+}
+#endif
 
 // Return a larger (newWidth x newHeight) copy of 'src' with black padding
 // around it.

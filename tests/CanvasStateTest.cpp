@@ -6,15 +6,28 @@
  */
 
 #include "CanvasStateHelpers.h"
-#include "SkCanvas.h"
+#include "SkBitmap.h"
+#include "SkCanvasPriv.h"
 #include "SkCanvasStateUtils.h"
+#include "SkClipOpPriv.h"
+#include "SkColor.h"
 #include "SkCommandLineFlags.h"
 #include "SkDrawFilter.h"
+#include "SkImageInfo.h"
 #include "SkPaint.h"
 #include "SkRRect.h"
 #include "SkRect.h"
+#include "SkRegion.h"
+#include "SkScalar.h"
+#include "SkTDArray.h"
 #include "SkTLazy.h"
+#include "SkTypes.h"
 #include "Test.h"
+
+#include <cstring>
+#include <memory>
+
+class SkCanvasState;
 
 // dlopen and the library flag are only used for tests which require this flag.
 #ifdef SK_SUPPORT_LEGACY_CLIPTOLAYERFLAG
@@ -37,7 +50,7 @@ public:
     OpenLibResult(skiatest::Reporter* reporter) {
         if (FLAGS_library.count() == 1) {
             fHandle = dlopen(FLAGS_library[0], RTLD_LAZY | RTLD_LOCAL);
-            REPORTER_ASSERT_MESSAGE(reporter, fHandle != nullptr, "Failed to open library!");
+            REPORTER_ASSERT(reporter, fHandle != nullptr, "Failed to open library!");
         } else {
             fHandle = nullptr;
         }
@@ -72,9 +85,9 @@ DEF_TEST(CanvasState_test_complex_layers, reporter) {
 
     const int layerAlpha[] = { 255, 255, 0 };
     const SkCanvas::SaveLayerFlags flags[] = {
-        static_cast<SkCanvas::SaveLayerFlags>(SkCanvas::kDontClipToLayer_Legacy_SaveLayerFlag),
+        static_cast<SkCanvas::SaveLayerFlags>(SkCanvasPriv::kDontClipToLayer_SaveLayerFlag),
         0,
-        static_cast<SkCanvas::SaveLayerFlags>(SkCanvas::kDontClipToLayer_Legacy_SaveLayerFlag),
+        static_cast<SkCanvas::SaveLayerFlags>(SkCanvasPriv::kDontClipToLayer_SaveLayerFlag),
     };
     REPORTER_ASSERT(reporter, sizeof(layerAlpha) == sizeof(flags));
 
@@ -140,10 +153,10 @@ DEF_TEST(CanvasState_test_complex_layers, reporter) {
         }
 
         // now we memcmp the two bitmaps
-        REPORTER_ASSERT(reporter, bitmaps[0].getSize() == bitmaps[1].getSize());
+        REPORTER_ASSERT(reporter, bitmaps[0].computeByteSize() == bitmaps[1].computeByteSize());
         REPORTER_ASSERT(reporter, !memcmp(bitmaps[0].getPixels(),
                                           bitmaps[1].getPixels(),
-                                          bitmaps[0].getSize()));
+                                          bitmaps[0].computeByteSize()));
     }
 }
 #endif
@@ -179,9 +192,9 @@ DEF_TEST(CanvasState_test_complex_clips, reporter) {
                                      SkRegion::kReplace_Op,
     };
     const SkCanvas::SaveLayerFlags flags[] = {
-        static_cast<SkCanvas::SaveLayerFlags>(SkCanvas::kDontClipToLayer_Legacy_SaveLayerFlag),
+        static_cast<SkCanvas::SaveLayerFlags>(SkCanvasPriv::kDontClipToLayer_SaveLayerFlag),
         0,
-        static_cast<SkCanvas::SaveLayerFlags>(SkCanvas::kDontClipToLayer_Legacy_SaveLayerFlag),
+        static_cast<SkCanvas::SaveLayerFlags>(SkCanvasPriv::kDontClipToLayer_SaveLayerFlag),
     };
     REPORTER_ASSERT(reporter, sizeof(clipOps) == sizeof(flags));
 
@@ -252,10 +265,10 @@ DEF_TEST(CanvasState_test_complex_clips, reporter) {
     }
 
     // now we memcmp the two bitmaps
-    REPORTER_ASSERT(reporter, bitmaps[0].getSize() == bitmaps[1].getSize());
+    REPORTER_ASSERT(reporter, bitmaps[0].computeByteSize() == bitmaps[1].computeByteSize());
     REPORTER_ASSERT(reporter, !memcmp(bitmaps[0].getPixels(),
                                       bitmaps[1].getPixels(),
-                                      bitmaps[0].getSize()));
+                                      bitmaps[0].computeByteSize()));
 }
 #endif
 
@@ -278,13 +291,12 @@ DEF_TEST(CanvasState_test_draw_filters, reporter) {
 
     SkCanvasState* state = SkCanvasStateUtils::CaptureCanvasState(&canvas);
     REPORTER_ASSERT(reporter, state);
-    SkCanvas* tmpCanvas = SkCanvasStateUtils::CreateFromCanvasState(state);
+    std::unique_ptr<SkCanvas> tmpCanvas = SkCanvasStateUtils::MakeFromCanvasState(state);
     REPORTER_ASSERT(reporter, tmpCanvas);
 
     REPORTER_ASSERT(reporter, canvas.getDrawFilter());
     REPORTER_ASSERT(reporter, nullptr == tmpCanvas->getDrawFilter());
 
-    tmpCanvas->unref();
     SkCanvasStateUtils::ReleaseCanvasState(state);
 }
 
@@ -300,15 +312,17 @@ DEF_TEST(CanvasState_test_soft_clips, reporter) {
     SkRRect roundRect;
     roundRect.setOval(SkRect::MakeWH(5, 5));
 
-    canvas.clipRRect(roundRect, SkCanvas::kIntersect_Op, true);
+    canvas.clipRRect(roundRect, kIntersect_SkClipOp, true);
 
     SkCanvasState* state = SkCanvasStateUtils::CaptureCanvasState(&canvas);
     REPORTER_ASSERT(reporter, !state);
 }
 
-#ifdef SK_SUPPORT_LEGACY_CLIPTOLAYERFLAG
-#include "SkClipStack.h"
 DEF_TEST(CanvasState_test_saveLayer_clip, reporter) {
+#ifdef SK_SUPPORT_LEGACY_CLIPTOLAYERFLAG
+    static_assert(SkCanvas::kDontClipToLayer_Legacy_SaveLayerFlag ==
+                  SkCanvasPriv::kDontClipToLayer_SaveLayerFlag, "");
+#endif
     const int WIDTH = 100;
     const int HEIGHT = 100;
     const int LAYER_WIDTH = 50;
@@ -321,31 +335,22 @@ DEF_TEST(CanvasState_test_saveLayer_clip, reporter) {
     SkRect bounds = SkRect::MakeWH(SkIntToScalar(LAYER_WIDTH), SkIntToScalar(LAYER_HEIGHT));
     canvas.clipRect(SkRect::MakeWH(SkIntToScalar(WIDTH), SkIntToScalar(HEIGHT)));
 
-    // Check that saveLayer without the kClipToLayer_SaveFlag leaves the
-    // clip stack unchanged.
-    canvas.saveLayer(SkCanvas::SaveLayerRec(&bounds,
-                                            nullptr,
-                                            SkCanvas::kDontClipToLayer_Legacy_SaveLayerFlag));
-    SkRect clipStackBounds;
-    SkClipStack::BoundsType boundsType;
-    canvas.getClipStack()->getBounds(&clipStackBounds, &boundsType);
-    // The clip stack will return its bounds, or it may be "full" : i.e. empty + inside_out.
-    // Either result is consistent with this test, since the canvas' size is WIDTH/HEIGHT
-    if (SkClipStack::kInsideOut_BoundsType == boundsType) {
-        REPORTER_ASSERT(reporter, clipStackBounds.isEmpty());
-    } else {
-        REPORTER_ASSERT(reporter, clipStackBounds.width() == WIDTH);
-        REPORTER_ASSERT(reporter, clipStackBounds.height() == HEIGHT);
-    }
+    SkIRect devClip;
+    // Check that saveLayer without the kClipToLayer_SaveFlag leaves the clip unchanged.
+    canvas.saveLayer(SkCanvas::SaveLayerRec(&bounds, nullptr,
+            (SkCanvas::SaveLayerFlags) SkCanvasPriv::kDontClipToLayer_SaveLayerFlag));
+    devClip = canvas.getDeviceClipBounds();
+    REPORTER_ASSERT(reporter, canvas.isClipRect());
+    REPORTER_ASSERT(reporter, devClip.width() == WIDTH);
+    REPORTER_ASSERT(reporter, devClip.height() == HEIGHT);
     canvas.restore();
 
     // Check that saveLayer with the kClipToLayer_SaveFlag sets the clip
     // stack to the layer bounds.
     canvas.saveLayer(&bounds, nullptr);
-    canvas.getClipStack()->getBounds(&clipStackBounds, &boundsType);
-    REPORTER_ASSERT(reporter, clipStackBounds.width() == LAYER_WIDTH);
-    REPORTER_ASSERT(reporter, clipStackBounds.height() == LAYER_HEIGHT);
-
+    devClip = canvas.getDeviceClipBounds();
+    REPORTER_ASSERT(reporter, canvas.isClipRect());
+    REPORTER_ASSERT(reporter, devClip.width() == LAYER_WIDTH);
+    REPORTER_ASSERT(reporter, devClip.height() == LAYER_HEIGHT);
     canvas.restore();
 }
-#endif

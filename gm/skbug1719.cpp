@@ -6,8 +6,9 @@
  */
 
 #include "gm.h"
-#include "SkBlurMaskFilter.h"
+#include "sk_tool_utils.h"
 #include "SkColorFilter.h"
+#include "SkMaskFilter.h"
 #include "SkPath.h"
 
 /**
@@ -61,8 +62,7 @@ DEF_SIMPLE_GM_BG(skbug1719, canvas, 300, 100,
         paint.setAntiAlias(true);
         paint.setColor(0xFF000000);
         paint.setMaskFilter(
-            SkBlurMaskFilter::Make(kNormal_SkBlurStyle, 0.78867501f,
-                                   SkBlurMaskFilter::kHighQuality_BlurFlag));
+            SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, 0.78867501f));
         paint.setColorFilter(SkColorFilter::MakeModeFilter(0xBFFFFFFF, SkBlendMode::kSrcIn));
 
         canvas->clipPath(clipPath, true);

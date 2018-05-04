@@ -16,6 +16,16 @@ bool SkCoincidentSpans::collapsed(const SkOpPtT* test) const {
         || (fOppPtTEnd == test && fOppPtTStart->contains(test));
 }
 
+// out of line since this function is referenced by address
+const SkOpPtT* SkCoincidentSpans::coinPtTEnd() const {
+    return fCoinPtTEnd;
+}
+
+// out of line since this function is referenced by address
+const SkOpPtT* SkCoincidentSpans::coinPtTStart() const {
+    return fCoinPtTStart;
+}
+
 // sets the span's end to the ptT referenced by the previous-next
 void SkCoincidentSpans::correctOneEnd(
         const SkOpPtT* (SkCoincidentSpans::* getEnd)() const,
@@ -125,6 +135,16 @@ bool SkCoincidentSpans::contains(const SkOpPtT* s, const SkOpPtT* e) const {
     }
 }
 
+// out of line since this function is referenced by address
+const SkOpPtT* SkCoincidentSpans::oppPtTStart() const {
+    return fOppPtTStart;
+}
+
+// out of line since this function is referenced by address
+const SkOpPtT* SkCoincidentSpans::oppPtTEnd() const {
+    return fOppPtTEnd;
+}
+
 // A coincident span is unordered if the pairs of points in the main and opposite curves'
 // t values do not ascend or descend. For instance, if a tightly arced quadratic is
 // coincident with another curve, it may intersect it out of order.
@@ -142,7 +162,7 @@ bool SkCoincidentSpans::ordered(bool* result) const {
     do {
         const SkOpPtT* opp = next->contains(oppSeg);
         if (!opp) {
-            SkOPOBJASSERT(start, 0);  // may assert if coincident span isn't fully processed
+//            SkOPOBJASSERT(start, 0);  // may assert if coincident span isn't fully processed
             return false;
         }
         if ((oppLastT > opp->fT) != flipped) {
@@ -246,8 +266,7 @@ void SkOpCoincidence::add(SkOpPtT* coinPtTStart, SkOpPtT* coinPtTEnd, SkOpPtT* o
     SkOPASSERT(!oppPtTEnd->deleted());
     DebugCheckAdd(fHead, coinPtTStart, coinPtTEnd, oppPtTStart, oppPtTEnd);
     DebugCheckAdd(fTop, coinPtTStart, coinPtTEnd, oppPtTStart, oppPtTEnd);
-    SkCoincidentSpans* coinRec = SkOpTAllocator<SkCoincidentSpans>::Allocate(
-            this->globalState()->allocator());
+    SkCoincidentSpans* coinRec = this->globalState()->allocator()->make<SkCoincidentSpans>();
     coinRec->init(SkDEBUGCODE(fGlobalState));
     coinRec->set(this->fHead, coinPtTStart, coinPtTEnd, oppPtTStart, oppPtTEnd);
     fHead = coinRec;
@@ -258,7 +277,11 @@ bool SkOpCoincidence::addEndMovedSpans(const SkOpSpan* base, const SkOpSpanBase*
     const SkOpPtT* testPtT = testSpan->ptT();
     const SkOpPtT* stopPtT = testPtT;
     const SkOpSegment* baseSeg = base->segment();
+    int escapeHatch = 100000;  // this is 100 times larger than the debugLoopLimit test
     while ((testPtT = testPtT->next()) != stopPtT) {
+        if (--escapeHatch <= 0) {
+            return false;  // if triggered (likely by a fuzz-generated test) too complex to succeed
+        }
         const SkOpSegment* testSeg = testPtT->segment();
         if (testPtT->deleted()) {
             continue;
@@ -276,7 +299,7 @@ bool SkOpCoincidence::addEndMovedSpans(const SkOpSpan* base, const SkOpSpanBase*
         SkDVector dxdy = baseSeg->dSlopeAtT(base->t());
         const SkPoint& pt = base->pt();
         SkDLine ray = {{{pt.fX, pt.fY}, {pt.fX + dxdy.fY, pt.fY - dxdy.fX}}};
-        SkIntersections i;
+        SkIntersections i  SkDEBUGCODE((this->globalState()));
         (*CurveIntersectRay[testSeg->verb()])(testSeg->pts(), testSeg->weight(), ray, &i);
         for (int index = 0; index < i.used(); ++index) {
             double t = i[0][index];
@@ -587,7 +610,7 @@ bool SkOpCoincidence::checkOverlap(SkCoincidentSpans* check,
 /* Please keep this in sync with debugAddIfMissing() */
 // note that over1s, over1e, over2s, over2e are ordered
 bool SkOpCoincidence::addIfMissing(const SkOpPtT* over1s, const SkOpPtT* over2s,
-        double tStart, double tEnd, SkOpSegment* coinSeg, SkOpSegment* oppSeg, bool* added  
+        double tStart, double tEnd, SkOpSegment* coinSeg, SkOpSegment* oppSeg, bool* added
         SkDEBUGPARAMS(const SkOpPtT* over1e) SkDEBUGPARAMS(const SkOpPtT* over2e)) {
     SkASSERT(tStart < tEnd);
     SkASSERT(over1s->fT < over1e->fT);
@@ -668,10 +691,10 @@ bool SkOpCoincidence::addOrOverlap(SkOpSegment* coinSeg, SkOpSegment* oppSeg,
     if (overlap && os && oe && overlap->contains(os, oe)) {
         return true;
     }
-    SkASSERT(!cs || !cs->deleted());
-    SkASSERT(!os || !os->deleted());
-    SkASSERT(!ce || !ce->deleted());
-    SkASSERT(!oe || !oe->deleted());
+    FAIL_IF(cs && cs->deleted());
+    FAIL_IF(os && os->deleted());
+    FAIL_IF(ce && ce->deleted());
+    FAIL_IF(oe && oe->deleted());
     const SkOpPtT* csExisting = !cs ? coinSeg->existing(coinTs, nullptr) : nullptr;
     const SkOpPtT* ceExisting = !ce ? coinSeg->existing(coinTe, nullptr) : nullptr;
     FAIL_IF(csExisting && csExisting == ceExisting);
@@ -700,6 +723,7 @@ bool SkOpCoincidence::addOrOverlap(SkOpSegment* coinSeg, SkOpSegment* oppSeg,
         csWritable->span()->addOpp(osWritable->span());
         cs = csWritable;
         os = osWritable->active();
+        FAIL_IF(!os);
         FAIL_IF((ce && ce->deleted()) || (oe && oe->deleted()));
     }
     if (!ce || !oe) {
@@ -771,7 +795,7 @@ bool SkOpCoincidence::addMissing(bool* added  DEBUG_COIN_DECLARE_PARAMS()) {
             return true;
         }
         const SkOpSegment* outerOpp = oos->segment();
-        SkASSERT(!outerOpp->done());
+        SkOPASSERT(!outerOpp->done());
         SkOpSegment* outerCoinWritable = const_cast<SkOpSegment*>(outerCoin);
         SkOpSegment* outerOppWritable = const_cast<SkOpSegment*>(outerOpp);
         SkCoincidentSpans* inner = outer;
@@ -785,7 +809,7 @@ bool SkOpCoincidence::addMissing(bool* added  DEBUG_COIN_DECLARE_PARAMS()) {
             const SkOpPtT* ios = inner->oppPtTStart();
             FAIL_IF(ios->deleted());
             const SkOpSegment* innerOpp = ios->segment();
-            SkASSERT(!innerOpp->done());
+            SkOPASSERT(!innerOpp->done());
             SkOpSegment* innerCoinWritable = const_cast<SkOpSegment*>(innerCoin);
             SkOpSegment* innerOppWritable = const_cast<SkOpSegment*>(innerOpp);
             if (outerCoin == innerCoin) {
@@ -826,7 +850,7 @@ bool SkOpCoincidence::addMissing(bool* added  DEBUG_COIN_DECLARE_PARAMS()) {
                 }
             } else if (outerOpp == innerOpp) {
                 const SkOpPtT* ooe = outer->oppPtTEnd();
-                SkASSERT(!ooe->deleted());
+                FAIL_IF(ooe->deleted());
                 const SkOpPtT* ioe = inner->oppPtTEnd();
                 if (ioe->deleted()) {
                     return true;
@@ -976,7 +1000,9 @@ bool SkOpCoincidence::apply(DEBUG_COIN_DECLARE_ONLY_PARAMS()) {
         return true;
     }
     do {
-        SkOpSpan* start = coin->coinPtTStartWritable()->span()->upCast();
+        SkOpSpanBase* startSpan = coin->coinPtTStartWritable()->span();
+        FAIL_IF(!startSpan->upCastable());
+        SkOpSpan* start = startSpan->upCast();
         if (start->deleted()) {
             continue;
         }
@@ -1004,6 +1030,7 @@ bool SkOpCoincidence::apply(DEBUG_COIN_DECLARE_ONLY_PARAMS()) {
                 if (oNext == oEnd) {
                     break;
                 }
+                FAIL_IF(!oNext->upCastable());
                 oStart = oNext->upCast();
             } while (true);
         }
@@ -1068,9 +1095,10 @@ bool SkOpCoincidence::apply(DEBUG_COIN_DECLARE_ONLY_PARAMS()) {
             SkDebugf("seg=%d span=%d windValue=%d oppValue=%d\n", oSegment->debugID(),
                     oStart->debugID(), oWindValue, oOppValue);
 #endif
+            FAIL_IF(windValue <= -1);
             start->setWindValue(windValue);
             start->setOppValue(oppValue);
-            FAIL_IF(oWindValue == -1);
+            FAIL_IF(oWindValue <= -1);
             oStart->setWindValue(oWindValue);
             oStart->setOppValue(oOppValue);
             if (!windValue && !oppValue) {
@@ -1296,13 +1324,14 @@ bool SkOpCoincidence::mark(DEBUG_COIN_DECLARE_ONLY_PARAMS()) {
         SkOpSpanBase* oStart = coin->oppPtTStartWritable()->span();
         SkOPASSERT(!oStart->deleted());
         SkOpSpanBase* oEnd = coin->oppPtTEndWritable()->span();
-        SkASSERT(!oEnd->deleted());
+        FAIL_IF(oEnd->deleted());
         bool flipped = coin->flipped();
         if (flipped) {
             SkTSwap(oStart, oEnd);
         }
         /* coin and opp spans may not match up. Mark the ends, and then let the interior
            get marked as many times as the spans allow */
+        FAIL_IF(!oStart->upCastable());
         start->insertCoincidence(oStart->upCast());
         end->insertCoinEnd(oEnd);
         const SkOpSegment* segment = start->segment();
@@ -1313,7 +1342,7 @@ bool SkOpCoincidence::mark(DEBUG_COIN_DECLARE_ONLY_PARAMS()) {
         FAIL_IF(!coin->ordered(&ordered));
         while ((next = next->upCast()->next()) != end) {
             FAIL_IF(!next->upCastable());
-            SkAssertResult(next->upCast()->insertCoincidence(oSegment, flipped, ordered));
+            FAIL_IF(!next->upCast()->insertCoincidence(oSegment, flipped, ordered));
         }
         while ((oNext = oNext->upCast()->next()) != oEnd) {
             FAIL_IF(!oNext->upCastable());

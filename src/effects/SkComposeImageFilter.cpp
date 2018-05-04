@@ -6,7 +6,8 @@
  */
 
 #include "SkComposeImageFilter.h"
-
+#include "SkColorSpaceXformer.h"
+#include "SkImageFilterPriv.h"
 #include "SkReadBuffer.h"
 #include "SkSpecialImage.h"
 #include "SkWriteBuffer.h"
@@ -61,6 +62,17 @@ sk_sp<SkSpecialImage> SkComposeImageFilter::onFilterImage(SkSpecialImage* source
     return outer;
 }
 
+sk_sp<SkImageFilter> SkComposeImageFilter::onMakeColorSpace(SkColorSpaceXformer* xformer) const {
+    SkASSERT(2 == this->countInputs() && this->getInput(0) && this->getInput(1));
+
+    auto input0 = xformer->apply(this->getInput(0));
+    auto input1 = xformer->apply(this->getInput(1));
+    if (input0.get() != this->getInput(0) || input1.get() != this->getInput(1)) {
+        return SkComposeImageFilter::Make(std::move(input0), std::move(input1));
+    }
+    return this->refMe();
+}
+
 SkIRect SkComposeImageFilter::onFilterBounds(const SkIRect& src, const SkMatrix& ctm,
                                              MapDirection direction) const {
     SkImageFilter* outer = this->getInput(0);
@@ -74,7 +86,6 @@ sk_sp<SkFlattenable> SkComposeImageFilter::CreateProc(SkReadBuffer& buffer) {
     return SkComposeImageFilter::Make(common.getInput(0), common.getInput(1));
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkComposeImageFilter::toString(SkString* str) const {
     SkImageFilter* outer = getInput(0);
     SkImageFilter* inner = getInput(1);
@@ -89,4 +100,3 @@ void SkComposeImageFilter::toString(SkString* str) const {
 
     str->appendf(")");
 }
-#endif

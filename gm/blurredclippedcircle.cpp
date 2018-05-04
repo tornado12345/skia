@@ -6,8 +6,10 @@
  */
 
 #include "gm.h"
-#include "SkBlurMaskFilter.h"
+#include "sk_tool_utils.h"
+#include "SkClipOpPriv.h"
 #include "SkColorFilter.h"
+#include "SkMaskFilter.h"
 #include "SkPaint.h"
 #include "SkRRect.h"
 
@@ -56,17 +58,16 @@ protected:
 
                     SkRect clipRect2 = SkRect::MakeLTRB(8, 8, 288, 288);
                     SkRRect clipRRect = SkRRect::MakeOval(clipRect2);
-                    canvas->clipRRect(clipRRect, SkCanvas::kDifference_Op, true);
+                    canvas->clipRRect(clipRRect, kDifference_SkClipOp, true);
 
                     SkRect r = SkRect::MakeLTRB(4, 4, 292, 292);
                     SkRRect rr = SkRRect::MakeOval(r);
 
                     SkPaint paint;
 
-                    paint.setMaskFilter(SkBlurMaskFilter::Make(
+                    paint.setMaskFilter(SkMaskFilter::MakeBlur(
                                             kNormal_SkBlurStyle,
-                                            1.366025f,
-                                            SkBlurMaskFilter::kHighQuality_BlurFlag));
+                                            1.366025f));
                     paint.setColorFilter(SkColorFilter::MakeModeFilter(
                                              SK_ColorRED,
                                              SkBlendMode::kSrcIn));

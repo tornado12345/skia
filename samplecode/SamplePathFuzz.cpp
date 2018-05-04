@@ -574,7 +574,8 @@ SkVector makeVector() {
 
 void validate(const SkPath& path) {
     if (fValidate) {
-        SkDEBUGCODE(path.experimentalValidateRef());
+        // FIXME: this could probably assert on path.isValid() instead
+        SkDEBUGCODE(path.validateRef());
     }
 }
 
@@ -629,8 +630,8 @@ static void path_fuzz_stroker(SkBitmap* bitmap, int seed) {
         const SkPath& path = fuzzPath.getPath();
         const SkPaint& paint = fuzzPath.getPaint();
         const SkImageInfo& info = bitmap->info();
-        SkCanvas* canvas(
-            SkCanvas::NewRasterDirect(info, bitmap->getPixels(), bitmap->rowBytes()));
+        std::unique_ptr<SkCanvas> canvas(
+            SkCanvas::MakeRasterDirect(info, bitmap->getPixels(), bitmap->rowBytes()));
         int w = info.width() / 4;
         int h = info.height() / 4;
         int x = localSeed / 4 % 4;
@@ -685,7 +686,6 @@ protected:
             path_fuzz_stroker(&offscreen, fIndex += 100);
             canvas->drawBitmap(offscreen, 0, 0);
         }
-        this->inval(nullptr);
     }
 
 private:

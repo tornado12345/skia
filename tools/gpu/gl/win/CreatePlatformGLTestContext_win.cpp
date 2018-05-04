@@ -16,15 +16,22 @@
 
 namespace {
 
+std::function<void()> context_restorer() {
+    auto glrc = wglGetCurrentContext();
+    auto dc = wglGetCurrentDC();
+    return [glrc, dc] { wglMakeCurrent(dc, glrc); };
+}
+
 class WinGLTestContext : public sk_gpu_test::GLTestContext {
 public:
-    WinGLTestContext(GrGLStandard forcedGpuAPI);
-	~WinGLTestContext() override;
+    WinGLTestContext(GrGLStandard forcedGpuAPI, WinGLTestContext* shareContext);
+    ~WinGLTestContext() override;
 
 private:
     void destroyGLContext();
 
     void onPlatformMakeCurrent() const override;
+    std::function<void()> onPlatformGetAutoContextRestore() const override;
     void onPlatformSwapBuffers() const override;
     GrGLFuncPtr onPlatformGetProcAddress(const char* name) const override;
 
@@ -37,7 +44,7 @@ private:
 
 ATOM WinGLTestContext::gWC = 0;
 
-WinGLTestContext::WinGLTestContext(GrGLStandard forcedGpuAPI)
+WinGLTestContext::WinGLTestContext(GrGLStandard forcedGpuAPI, WinGLTestContext* shareContext)
     : fWindow(nullptr)
     , fDeviceContext(nullptr)
     , fGlRenderContext(0)
@@ -85,13 +92,18 @@ WinGLTestContext::WinGLTestContext(GrGLStandard forcedGpuAPI)
         kGLES_GrGLStandard == forcedGpuAPI ?
         kGLES_SkWGLContextRequest : kGLPreferCompatibilityProfile_SkWGLContextRequest;
 
-    fPbufferContext = SkWGLPbufferContext::Create(fDeviceContext, 0, contextType);
+    HGLRC winShareContext = nullptr;
+    if (shareContext) {
+        winShareContext = shareContext->fPbufferContext ? shareContext->fPbufferContext->getGLRC()
+                                                        : shareContext->fGlRenderContext;
+    }
+    fPbufferContext = SkWGLPbufferContext::Create(fDeviceContext, contextType, winShareContext);
 
     HDC dc;
     HGLRC glrc;
-
     if (nullptr == fPbufferContext) {
-        if (!(fGlRenderContext = SkCreateWGLContext(fDeviceContext, 0, false, contextType))) {
+        if (!(fGlRenderContext = SkCreateWGLContext(fDeviceContext, 0, false, contextType,
+                                                    winShareContext))) {
             SkDebugf("Could not create rendering context.\n");
             this->destroyGLContext();
             return;
@@ -108,14 +120,15 @@ WinGLTestContext::WinGLTestContext(GrGLStandard forcedGpuAPI)
         glrc = fPbufferContext->getGLRC();
     }
 
+    SkScopeExit restorer(context_restorer());
     if (!(wglMakeCurrent(dc, glrc))) {
         SkDebugf("Could not set the context.\n");
         this->destroyGLContext();
         return;
     }
 
-    sk_sp<const GrGLInterface> gl(GrGLCreateNativeInterface());
-    if (nullptr == gl.get()) {
+    auto gl = GrGLMakeNativeInterface();
+    if (!gl) {
         SkDebugf("Could not create GL interface.\n");
         this->destroyGLContext();
         return;
@@ -126,7 +139,7 @@ WinGLTestContext::WinGLTestContext(GrGLStandard forcedGpuAPI)
         return;
     }
 
-    this->init(gl.release());
+    this->init(std::move(gl));
 }
 
 WinGLTestContext::~WinGLTestContext() {
@@ -137,6 +150,7 @@ WinGLTestContext::~WinGLTestContext() {
 void WinGLTestContext::destroyGLContext() {
     SkSafeSetNull(fPbufferContext);
     if (fGlRenderContext) {
+        // This deletes the context immediately even if it is current.
         wglDeleteContext(fGlRenderContext);
         fGlRenderContext = 0;
     }
@@ -167,6 +181,13 @@ void WinGLTestContext::onPlatformMakeCurrent() const {
     }
 }
 
+std::function<void()> WinGLTestContext::onPlatformGetAutoContextRestore() const {
+    if (wglGetCurrentContext() == fGlRenderContext) {
+        return nullptr;
+    }
+    return context_restorer();
+}
+
 void WinGLTestContext::onPlatformSwapBuffers() const {
     HDC dc;
 
@@ -189,11 +210,8 @@ GrGLFuncPtr WinGLTestContext::onPlatformGetProcAddress(const char* name) const {
 namespace sk_gpu_test {
 GLTestContext* CreatePlatformGLTestContext(GrGLStandard forcedGpuAPI,
                                            GLTestContext *shareContext) {
-    SkASSERT(!shareContext);
-    if (shareContext) {
-        return nullptr;
-    }
-    WinGLTestContext *ctx = new WinGLTestContext(forcedGpuAPI);
+    WinGLTestContext* winShareContext = reinterpret_cast<WinGLTestContext*>(shareContext);
+    WinGLTestContext *ctx = new WinGLTestContext(forcedGpuAPI, winShareContext);
     if (!ctx->isValid()) {
         delete ctx;
         return nullptr;

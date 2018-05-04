@@ -6,15 +6,16 @@
  */
 
 #include "gm.h"
+#include "sk_tool_utils.h"
 
 #include "Sk2DPathEffect.h"
 #include "SkBlurMask.h"
-#include "SkBlurMaskFilter.h"
 #include "SkColorMatrixFilter.h"
 #include "SkCanvas.h"
 #include "SkGradientShader.h"
 #include "SkGraphics.h"
 #include "SkLayerDrawLooper.h"
+#include "SkMaskFilter.h"
 #include "SkRandom.h"
 #include "SkTextBlob.h"
 
@@ -61,7 +62,7 @@ struct LooperSettings {
 };
 
 static void mask_filter(SkPaint* paint) {
-    paint->setMaskFilter(SkBlurMaskFilter::Make(kNormal_SkBlurStyle,
+    paint->setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle,
                                                 SkBlurMask::ConvertRadiusToSigma(3.f)));
 }
 

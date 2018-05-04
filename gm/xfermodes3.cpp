@@ -6,10 +6,11 @@
  */
 
 #include "gm.h"
+#include "sk_tool_utils.h"
 #include "SkBitmap.h"
 #include "SkGradientShader.h"
 #include "SkSurface.h"
-#include "SkXfermode.h"
+#include "SkBlendModePriv.h"
 #include "SkColorPriv.h"
 
 #if SK_SUPPORT_GPU
@@ -59,7 +60,7 @@ protected:
             0x80,
         };
 
-        auto tempSurface(this->possiblyCreateTempSurface(canvas, kSize, kSize));
+        auto tempSurface(this->makeTempSurface(canvas, kSize, kSize));
 
         int test = 0;
         int x = 0, y = 0;
@@ -68,10 +69,9 @@ protected:
             {SkPaint::kStroke_Style, SkIntToScalar(kSize) / 2},
         };
         for (size_t s = 0; s < SK_ARRAY_COUNT(kStrokes); ++s) {
-            for (size_t m = 0; m <= SkXfermode::kLastMode; ++m) {
+            for (size_t m = 0; m <= (size_t)SkBlendMode::kLastMode; ++m) {
                 SkBlendMode mode = static_cast<SkBlendMode>(m);
-                canvas->drawText(SkXfermode::ModeName(mode),
-                                 strlen(SkXfermode::ModeName(mode)),
+                canvas->drawString(SkBlendMode_Name(mode),
                                  SkIntToScalar(x),
                                  SkIntToScalar(y + kSize + 3) + labelP.getTextSize(),
                                  labelP);
@@ -118,21 +118,13 @@ private:
      * We are trying to test those. We could use saveLayer() to create small SkGpuDevices but
      * saveLayer() uses the texture cache. This means that the actual render target may be larger
      * than the layer. Because the clip will contain the layer's bounds, no draws will be full-RT.
-     * So when running on a GPU canvas we explicitly create a temporary canvas using a texture with
-     * dimensions exactly matching the layer size.
+     * So explicitly create a temporary canvas with dimensions exactly the layer size.
      */
-    sk_sp<SkSurface> possiblyCreateTempSurface(SkCanvas* baseCanvas, int w, int h) {
-#if SK_SUPPORT_GPU
-        GrContext* context = baseCanvas->getGrContext();
+    sk_sp<SkSurface> makeTempSurface(SkCanvas* baseCanvas, int w, int h) {
         SkImageInfo baseInfo = baseCanvas->imageInfo();
         SkImageInfo info = SkImageInfo::Make(w, h, baseInfo.colorType(), baseInfo.alphaType(),
-                                             sk_ref_sp(baseInfo.colorSpace()));
-        SkSurfaceProps canvasProps(SkSurfaceProps::kLegacyFontHost_InitType);
-        baseCanvas->getProps(&canvasProps);
-        return SkSurface::MakeRenderTarget(context, SkBudgeted::kNo, info, 0, &canvasProps);
-#else
-        return nullptr;
-#endif
+                                             baseInfo.refColorSpace());
+        return baseCanvas->makeSurface(info);
     }
 
     void drawMode(SkCanvas* canvas,
@@ -146,6 +138,7 @@ private:
         SkCanvas* modeCanvas;
         if (nullptr == surface) {
             canvas->saveLayer(&r, nullptr);
+            canvas->clipRect(r);
             modeCanvas = canvas;
         } else {
             modeCanvas = surface->getCanvas();
@@ -181,7 +174,6 @@ private:
         };
         SkBitmap bg;
         bg.allocN32Pixels(2, 2, true);
-        SkAutoLockPixels bgAlp(bg);
         memcpy(bg.getPixels(), kCheckData, sizeof(kCheckData));
 
         SkMatrix lm;

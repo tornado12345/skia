@@ -15,60 +15,70 @@ CONFIG_RELEASE = 'Release'
 
 class SkiaVarsApi(recipe_api.RecipeApi):
 
-  def make_path(self, *path):
-    """Return a Path object for the given path."""
-    key  = 'custom_%s' % '_'.join(path)
-    self.m.path.c.base_paths[key] = tuple(path)
-    return self.m.path[key]
+  override_checkout_root = None
+  override_gclient_cache = None
 
   def setup(self):
     """Prepare the variables."""
     # Setup
     self.builder_name = self.m.properties['buildername']
-    self.master_name = self.m.properties['mastername']
-    self.slave_name = self.m.properties['slavename']
-    self.build_number = self.m.properties['buildnumber']
 
-    self.slave_dir = self.m.path['slave_build']
+    self.slave_dir = self.m.path['start_dir']
+
+    # Special input/output directories.
+    self.build_dir = self.slave_dir.join('build')
+    self.test_dir = self.slave_dir.join('test')
+    self.perf_dir = self.slave_dir.join('perf')
+
     self.checkout_root = self.slave_dir
-    self.default_env = {}
-    self.gclient_env = {}
-    self.is_compile_bot = self.builder_name.startswith('Build-')
-    self.no_buildbot = self.m.properties.get('nobuildbot', '') == 'True'
-    self.skia_task_id = self.m.properties.get('skia_task_id', None)
-
+    self.default_env = self.m.context.env
     self.default_env['CHROME_HEADLESS'] = '1'
-    # The 'depot_tools' directory comes from recipe DEPS and isn't provided by
-    # default. We have to set it manually.
-    self.m.path.c.base_paths['depot_tools'] = (
-        self.m.path.c.base_paths['slave_build'] +
-        ('skia', 'infra', 'bots', '.recipe_deps', 'depot_tools'))
-    if 'Win' in self.builder_name:
-      self.m.path.c.base_paths['depot_tools'] = (
-          'c:\\', 'Users', 'chrome-bot', 'depot_tools')
+    self.default_env['PATH'] = self.m.path.pathsep.join([
+        self.default_env.get('PATH', '%(PATH)s'),
+        str(self.m.bot_update._module.PACKAGE_REPO_ROOT),
+    ])
+    self.gclient_env = {'DEPOT_TOOLS_UPDATE': '0'}
+    self.is_compile_bot = self.builder_name.startswith('Build-')
 
+    self.persistent_checkout = False
     # Compile bots keep a persistent checkout.
-    self.persistent_checkout = (self.is_compile_bot or
-                                'RecreateSKPs' in self.builder_name or
-                                '-CT_' in self.builder_name or
-                                'Presubmit' in self.builder_name or
-                                'InfraTests' in self.builder_name)
-    if self.persistent_checkout:
-      if 'Win' in self.builder_name:
-        self.checkout_root = self.make_path('C:\\', 'b', 'work')
-        self.gclient_cache = self.make_path('C:\\', 'b', 'cache')
-      else:
-        self.checkout_root = self.make_path('/', 'b', 'work')
-        self.gclient_cache = self.make_path('/', 'b', 'cache')
+    if self.is_compile_bot and 'NoDEPS' not in self.builder_name:
+      self.persistent_checkout = True
+    if 'Housekeeper' in self.builder_name:
+      self.persistent_checkout = True
+    if '-CT_' in self.builder_name:
+      self.persistent_checkout = True
+    # We need the source code for the Coverage's Upload step to be in the
+    # same absolute location as when we compiled it so we can map the
+    # coverage data to actual line numbers. We ensure this by making sure
+    # we have a checkout on the Coverage's Upload step and that the Upload
+    # step runs on the same bots that Compile.
+    if 'Coverage' in self.builder_name and 'Upload' in self.builder_name:
+      self.persistent_checkout = True
 
+    self.cache_dir = self.slave_dir.join('cache')
+    if self.persistent_checkout:
+      self.checkout_root = self.cache_dir.join('work')
+      self.gclient_cache = self.cache_dir.join('git')
+    if self.override_checkout_root:
+      self.checkout_root = self.override_checkout_root
+      self.gclient_cache = self.override_gclient_cache
       # got_revision is filled in after checkout steps.
       self.got_revision = None
     else:
-      # If there's no persistent checkout, then we have to asume we got the
+      # If there's no persistent checkout, then we have to assume we got the
       # correct revision of the files from isolate.
       self.got_revision = self.m.properties['revision']
 
+    # Some bots also require a checkout of Flutter; in this case we use the
+    # checkout of Skia obtained through DEPS in src/third_party/skia.
+    self.need_flutter_checkout = 'Flutter' in self.builder_name
+
     self.skia_dir = self.checkout_root.join('skia')
+    if self.need_flutter_checkout:
+      self.checkout_root = self.checkout_root.join('flutter')
+      self.skia_dir = self.checkout_root.join('src', 'third_party', 'skia')
+
     if not self.persistent_checkout:
       self.m.path['checkout'] = self.skia_dir
 
@@ -76,12 +86,18 @@ class SkiaVarsApi(recipe_api.RecipeApi):
     self.resource_dir = self.skia_dir.join('resources')
     self.images_dir = self.slave_dir.join('skimage')
     self.skia_out = self.skia_dir.join('out', self.builder_name)
-    self.swarming_out_dir = self.make_path(self.m.properties['swarm_out_dir'])
+    self.swarming_out_dir = self.slave_dir.join(
+        self.m.properties['swarm_out_dir'])
+    if 'ParentRevision' in self.builder_name:
+      # Tasks that depend on ParentRevision builds usually also depend on a
+      # second build task. Use a different path for build results so that the
+      # binaries end up in different directories in the isolate.
+      self.swarming_out_dir = self.swarming_out_dir.join('ParentRevision')
     self.local_skp_dir = self.slave_dir.join('skp')
     self.local_svg_dir = self.slave_dir.join('svg')
     if not self.is_compile_bot:
-      self.skia_out = self.slave_dir.join('out')
-    self.tmp_dir = self.m.path['slave_build'].join('tmp')
+      self.skia_out = self.build_dir.join('out')
+    self.tmp_dir = self.m.path['start_dir'].join('tmp')
 
     # Some bots also require a checkout of chromium.
     self.need_chromium_checkout = False
@@ -93,54 +109,67 @@ class SkiaVarsApi(recipe_api.RecipeApi):
       self.gclient_env['CPPFLAGS'] = (
           '-DSK_ALLOW_CROSSPROCESS_PICTUREIMAGEFILTERS=1')
 
-    # Some bots also require a checkout of PDFium.
-    self.need_pdfium_checkout = 'PDFium' in self.builder_name
-
     self.builder_cfg = self.m.builder_name_schema.DictForBuilderName(
         self.builder_name)
     self.role = self.builder_cfg['role']
-    if self.role == self.m.builder_name_schema.BUILDER_ROLE_HOUSEKEEPER:
+    if self.role in [self.m.builder_name_schema.BUILDER_ROLE_HOUSEKEEPER,
+                     self.m.builder_name_schema.BUILDER_ROLE_CALMBENCH]:
       self.configuration = CONFIG_RELEASE
     else:
       self.configuration = self.builder_cfg.get('configuration', CONFIG_DEBUG)
     arch = (self.builder_cfg.get('arch') or self.builder_cfg.get('target_arch'))
     if ('Win' in self.builder_cfg.get('os', '') and arch == 'x86_64'):
       self.configuration += '_x64'
+    self.extra_tokens = []
+    if len(self.builder_cfg.get('extra_config', '')) > 0:
+      if self.builder_cfg['extra_config'].startswith('SK'):
+        assert self.builder_cfg['extra_config'].isupper()
+        self.extra_tokens = [self.builder_cfg['extra_config']]
+      else:
+        self.extra_tokens = self.builder_cfg['extra_config'].split('_')
 
     self.default_env.update({'SKIA_OUT': self.skia_out,
                              'BUILDTYPE': self.configuration})
 
-    self.patch_storage = self.m.properties.get('patch_storage', 'rietveld')
+    self.patch_storage = self.m.properties.get('patch_storage', 'gerrit')
     self.issue = None
     self.patchset = None
-    if self.no_buildbot:
-      self.is_trybot = False
-      if (self.m.properties.get('issue', '') and
-          self.m.properties.get('patchset', '')):
-        self.is_trybot = True
-        self.issue = self.m.properties['issue']
-        self.patchset = self.m.properties['patchset']
-      elif (self.m.properties.get('patch_issue', '') and
-            self.m.properties.get('patch_ref', '')):
-        self.is_trybot = True
-        self.issue = self.m.properties['patch_issue']
-        self.patchset = self.m.properties['patch_ref'].split('/')[-1]
-    else:
-      self.is_trybot = self.builder_cfg['is_trybot']
-      if self.is_trybot:
-        if self.patch_storage == 'gerrit':
-          self.issue = self.m.properties['patch_issue']
-          self.patchset = self.m.properties['patch_ref'].split('/')[-1]
-        else:
-          self.issue = self.m.properties['issue']
-          self.patchset = self.m.properties['patchset']
+    self.is_trybot = False
+    if (self.m.properties.get('patch_issue', '') and
+        self.m.properties.get('patch_set', '')):
+      self.is_trybot = True
+      self.issue = self.m.properties['patch_issue']
+      self.patchset = self.m.properties['patch_set']
 
     self.dm_dir = self.m.path.join(
         self.swarming_out_dir, 'dm')
     self.perf_data_dir = self.m.path.join(self.swarming_out_dir,
         'perfdata', self.builder_name, 'data')
+    self.dumps_dir = self.m.path.join(
+        self.swarming_out_dir, 'dumps')
     self._swarming_bot_id = None
     self._swarming_task_id = None
+
+    # Data should go under in _data_dir, which may be preserved across runs.
+    self.android_data_dir = '/sdcard/revenge_of_the_skiabot/'
+    # Executables go under _bin_dir, which, well, allows executable files.
+    self.android_bin_dir  = '/data/local/tmp/'
+
+    if self.builder_cfg.get('os', '') == 'Chromecast':
+      # On the Chromecast, everything goes in the (~110M) /cache/skia
+      self.android_bin_dir  = '/cache/skia/'
+      self.android_data_dir = '/cache/skia/'
+
+    self.chromeos_homedir = '/home/chronos/user/'
+
+    # Internal bot support.
+    self.internal_hardware_label = (
+        self.m.properties.get('internal_hardware_label'))
+    self.is_internal_bot = self.internal_hardware_label is not None
+
+  @property
+  def is_linux(self):
+    return 'Ubuntu' in self.builder_name or 'Debian' in self.builder_name
 
   @property
   def upload_dm_results(self):
@@ -201,4 +230,3 @@ print os.environ.get('SWARMING_TASK_ID', '')
 ''',
           stdout=self.m.raw_io.output()).stdout.rstrip()
     return self._swarming_task_id
-

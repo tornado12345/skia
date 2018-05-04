@@ -6,7 +6,9 @@
  */
 
 #include "SkLuaCanvas.h"
+
 #include "SkLua.h"
+#include "SkStringUtils.h"
 
 extern "C" {
     #include "lua.h"
@@ -51,11 +53,9 @@ void AutoCallLua::pushEncodedText(SkPaint::TextEncoding enc, const void* text,
         case SkPaint::kUTF8_TextEncoding:
             this->pushString((const char*)text, length, "text");
             break;
-        case SkPaint::kUTF16_TextEncoding: {
-            SkString str;
-            str.setUTF16((const uint16_t*)text, length);
-            this->pushString(str, "text");
-        } break;
+        case SkPaint::kUTF16_TextEncoding:
+            this->pushString(SkStringFromUTF16((const uint16_t*)text, length), "text");
+            break;
         case SkPaint::kGlyphID_TextEncoding:
             this->pushArrayU16((const uint16_t*)text, SkToInt(length >> 1),
                                "glyphs");
@@ -135,28 +135,28 @@ void SkLuaCanvas::didSetMatrix(const SkMatrix& matrix) {
     this->INHERITED::didSetMatrix(matrix);
 }
 
-void SkLuaCanvas::onClipRect(const SkRect& r, ClipOp op, ClipEdgeStyle edgeStyle) {
+void SkLuaCanvas::onClipRect(const SkRect& r, SkClipOp op, ClipEdgeStyle edgeStyle) {
     AUTO_LUA("clipRect");
     lua.pushRect(r, "rect");
     lua.pushBool(kSoft_ClipEdgeStyle == edgeStyle, "aa");
     this->INHERITED::onClipRect(r, op, edgeStyle);
 }
 
-void SkLuaCanvas::onClipRRect(const SkRRect& rrect, ClipOp op, ClipEdgeStyle edgeStyle) {
+void SkLuaCanvas::onClipRRect(const SkRRect& rrect, SkClipOp op, ClipEdgeStyle edgeStyle) {
     AUTO_LUA("clipRRect");
     lua.pushRRect(rrect, "rrect");
     lua.pushBool(kSoft_ClipEdgeStyle == edgeStyle, "aa");
     this->INHERITED::onClipRRect(rrect, op, edgeStyle);
 }
 
-void SkLuaCanvas::onClipPath(const SkPath& path, ClipOp op, ClipEdgeStyle edgeStyle) {
+void SkLuaCanvas::onClipPath(const SkPath& path, SkClipOp op, ClipEdgeStyle edgeStyle) {
     AUTO_LUA("clipPath");
     lua.pushPath(path, "path");
     lua.pushBool(kSoft_ClipEdgeStyle == edgeStyle, "aa");
     this->INHERITED::onClipPath(path, op, edgeStyle);
 }
 
-void SkLuaCanvas::onClipRegion(const SkRegion& deviceRgn, ClipOp op) {
+void SkLuaCanvas::onClipRegion(const SkRegion& deviceRgn, SkClipOp op) {
     AUTO_LUA("clipRegion");
     this->INHERITED::onClipRegion(deviceRgn, op);
 }
@@ -307,11 +307,13 @@ void SkLuaCanvas::onDrawPicture(const SkPicture* picture, const SkMatrix* matrix
     this->INHERITED::onDrawPicture(picture, matrix, paint);
 }
 
-void SkLuaCanvas::onDrawVertices(VertexMode vmode, int vertexCount,
-                                 const SkPoint vertices[], const SkPoint texs[],
-                                 const SkColor colors[], SkBlendMode,
-                                 const uint16_t indices[], int indexCount,
-                                 const SkPaint& paint) {
+void SkLuaCanvas::onDrawDrawable(SkDrawable* drawable, const SkMatrix* matrix) {
+    AUTO_LUA("drawDrawable");
+    // call through so we can see the nested ops
+    this->INHERITED::onDrawDrawable(drawable, matrix);
+}
+
+void SkLuaCanvas::onDrawVerticesObject(const SkVertices*, SkBlendMode, const SkPaint& paint) {
     AUTO_LUA("drawVertices");
     lua.pushPaint(paint, "paint");
 }

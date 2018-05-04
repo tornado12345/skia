@@ -6,8 +6,56 @@
  */
 
 #include "gm.h"
-#include "SkCanvas.h"
+#include "sk_tool_utils.h"
+#include "SkCanvasPriv.h"
 #include "SkPath.h"
+#include "SkMakeUnique.h"
+
+
+#include "SkCubicMap.h"
+
+static void test_cubic(SkCanvas* canvas) {
+    const SkPoint pts[] = {
+        { 0.333333f, 0.333333f }, { 0.666666f, 0.666666f },
+        { 1, 0 }, { 0, 1 },
+        { 0, 1 }, { 1, 0 },
+        { 0, 0 }, { 1, 1 },
+        { 1, 1 }, { 0, 0 },
+        { 0, 1 }, { 0, 1 },
+        { 1, 0 }, { 1, 0 },
+    };
+
+    SkPaint paint0, paint1;
+    paint0.setAntiAlias(true);  paint0.setStrokeWidth(3/256.0f); paint0.setColor(SK_ColorRED);
+    paint1.setAntiAlias(true);
+
+    SkCubicMap cmap;
+
+    canvas->translate(10, 266);
+    canvas->scale(256, -256);
+    for (size_t i = 0; i < SK_ARRAY_COUNT(pts); i += 2) {
+        cmap.setPts(pts[i], pts[i+1]);
+
+        const int N = 128;
+        SkPoint tmp0[N+1], tmp1[N+1], tmp2[N+1];
+        for (int j = 0; j <= N; ++j) {
+            float p = j * 1.0f / N;
+            tmp0[j] = cmap.computeFromT(p);
+            tmp1[j].set(p, cmap.computeYFromX(p));
+            tmp2[j].set(p, cmap.hackYFromX(p));
+        }
+
+        canvas->save();
+        canvas->drawPoints(SkCanvas::kPolygon_PointMode, N+1, tmp0, paint0);
+        canvas->drawPoints(SkCanvas::kPolygon_PointMode, N+1, tmp1, paint1);
+        canvas->translate(0, -1.2f);
+        canvas->drawPoints(SkCanvas::kPolygon_PointMode, N+1, tmp0, paint0);
+        canvas->drawPoints(SkCanvas::kPolygon_PointMode, N+1, tmp2, paint1);
+        canvas->restore();
+
+        canvas->translate(1.1f, 0);
+    }
+}
 
 static void do_draw(SkCanvas* canvas, const SkRect& r) {
     SkPaint paint;
@@ -17,7 +65,7 @@ static void do_draw(SkCanvas* canvas, const SkRect& r) {
 }
 
 /**
- *  Exercise kDontClipToLayer_Legacy_SaveLayerFlag flag, which does not limit the clip to the
+ *  Exercise SkCanvasPriv::kDontClipToLayer_SaveLayerFlag flag, which does not limit the clip to the
  *  layer's bounds. Thus when a draw occurs, it can (depending on "where" it is) draw into the layer
  *  and/or draw onto the surrounding portions of the canvas, or both.
  *
@@ -50,15 +98,19 @@ DEF_SIMPLE_GM(dont_clip_to_layer, canvas, 120, 120) {
     canvas->saveLayer(&r, nullptr);
     canvas->drawColor(SK_ColorRED);
 
-    SkRect r0 = SkRect::MakeXYWH(r.left(), r.top(), r.width(), r.height()/2);
+    SkRect r0 = { 20, 20, 100, 55 };
+    SkRect r1 = { 20, 65, 100, 100 };
 
     SkCanvas::SaveLayerRec rec;
     rec.fPaint = nullptr;
     rec.fBounds = &r0;
     rec.fBackdrop = nullptr;
-    rec.fSaveLayerFlags = 1 << 31;//SkCanvas::kDontClipToLayer_Legacy_SaveLayerFlag;
+    rec.fSaveLayerFlags = SkCanvasPriv::kDontClipToLayer_SaveLayerFlag;
+    canvas->saveLayer(rec);
+    rec.fBounds = &r1;
     canvas->saveLayer(rec);
     do_draw(canvas, r);
+    canvas->restore();
     canvas->restore();
 
     canvas->restore();  // red-layer
@@ -135,6 +187,8 @@ protected:
     }
 
     void onDraw(SkCanvas* canvas) override {
+        if (0) { test_cubic(canvas); return; }
+
         // Initial pixel-boundary-aligned draw
         draw_rect_tests(canvas);
 
@@ -166,14 +220,14 @@ DEF_GM(return new AAClipGM;)
 
 #ifdef SK_BUILD_FOR_MAC
 
-static SkCanvas* make_canvas(const SkBitmap& bm) {
+static std::unique_ptr<SkCanvas> make_canvas(const SkBitmap& bm) {
     const SkImageInfo& info = bm.info();
     if (info.bytesPerPixel() == 4) {
-        return SkCanvas::NewRasterDirectN32(info.width(), info.height(),
-                                            (SkPMColor*)bm.getPixels(),
-                                            bm.rowBytes());
+        return SkCanvas::MakeRasterDirectN32(info.width(), info.height(),
+                                             (SkPMColor*)bm.getPixels(),
+                                             bm.rowBytes());
     } else {
-        return new SkCanvas(bm);
+        return skstd::make_unique<SkCanvas>(bm);
     }
 }
 
@@ -182,7 +236,6 @@ static void test_image(SkCanvas* canvas, const SkImageInfo& info) {
     SkBitmap bm;
     bm.allocPixels(info);
 
-    SkAutoTUnref<SkCanvas> newc(make_canvas(bm));
     if (info.isOpaque()) {
         bm.eraseColor(SK_ColorGREEN);
     } else {
@@ -192,16 +245,17 @@ static void test_image(SkCanvas* canvas, const SkImageInfo& info) {
     SkPaint paint;
     paint.setAntiAlias(true);
     paint.setColor(SK_ColorBLUE);
-    newc->drawCircle(50, 50, 49, paint);
+    make_canvas(bm)->drawCircle(50, 50, 49, paint);
     canvas->drawBitmap(bm, 10, 10);
 
     CGImageRef image = SkCreateCGImageRefWithColorspace(bm, nullptr);
 
     SkBitmap bm2;
     SkCreateBitmapFromCGImage(&bm2, image);
-    CGImageRelease(image);
-
     canvas->drawBitmap(bm2, 10, 120);
+    canvas->drawImage(SkMakeImageFromCGImage(image), 10, 120 + bm2.height() + 10);
+
+    CGImageRelease(image);
 }
 
 class CGImageGM : public skiagm::GM {
@@ -243,10 +297,7 @@ protected:
 private:
     typedef skiagm::GM INHERITED;
 };
-
-#if 0 // Disabled pending fix from reed@
-DEF_GM( return new CGImageGM; )
-#endif
+//DEF_GM( return new CGImageGM; )
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

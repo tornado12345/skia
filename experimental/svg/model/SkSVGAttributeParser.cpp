@@ -315,7 +315,7 @@ bool SkSVGAttributeParser::parseMatrixToken(SkMatrix* matrix) {
 
 bool SkSVGAttributeParser::parseTranslateToken(SkMatrix* matrix) {
     return this->parseParenthesized("translate", [this](SkMatrix* m) -> bool {
-        SkScalar tx, ty;
+        SkScalar tx = 0.0, ty = 0.0;
         this->parseWSToken();
         if (!this->parseScalarToken(&tx)) {
             return false;
@@ -332,7 +332,7 @@ bool SkSVGAttributeParser::parseTranslateToken(SkMatrix* matrix) {
 
 bool SkSVGAttributeParser::parseScaleToken(SkMatrix* matrix) {
     return this->parseParenthesized("scale", [this](SkMatrix* m) -> bool {
-        SkScalar sx, sy;
+        SkScalar sx = 0.0, sy = 0.0;
         if (!this->parseScalarToken(&sx)) {
             return false;
         }
@@ -443,6 +443,25 @@ bool SkSVGAttributeParser::parsePaint(SkSVGPaint* paint) {
     return parsedValue && this->parseEOSToken();
 }
 
+// https://www.w3.org/TR/SVG/masking.html#ClipPathProperty
+bool SkSVGAttributeParser::parseClipPath(SkSVGClip* clip) {
+    SkSVGStringType iri;
+    bool parsedValue = false;
+
+    if (this->parseExpectedStringToken("none")) {
+        *clip = SkSVGClip(SkSVGClip::Type::kNone);
+        parsedValue = true;
+    } else if (this->parseExpectedStringToken("inherit")) {
+        *clip = SkSVGClip(SkSVGClip::Type::kInherit);
+        parsedValue = true;
+    } else if (this->parseFuncIRI(&iri)) {
+        *clip = SkSVGClip(iri.value());
+        parsedValue = true;
+    }
+
+    return parsedValue && this->parseEOSToken();
+}
+
 // https://www.w3.org/TR/SVG/painting.html#StrokeLinecapProperty
 bool SkSVGAttributeParser::parseLineCap(SkSVGLineCap* cap) {
     static const struct {
@@ -550,4 +569,81 @@ bool SkSVGAttributeParser::parsePoints(SkSVGPointsType* points) {
     }
 
     return false;
+}
+
+// https://www.w3.org/TR/SVG/painting.html#FillRuleProperty
+bool SkSVGAttributeParser::parseFillRule(SkSVGFillRule* fillRule) {
+    static const struct {
+        SkSVGFillRule::Type fType;
+        const char*         fName;
+    } gFillRuleInfo[] = {
+        { SkSVGFillRule::Type::kNonZero, "nonzero" },
+        { SkSVGFillRule::Type::kEvenOdd, "evenodd" },
+        { SkSVGFillRule::Type::kInherit, "inherit" },
+    };
+
+    bool parsedValue = false;
+    for (size_t i = 0; i < SK_ARRAY_COUNT(gFillRuleInfo); ++i) {
+        if (this->parseExpectedStringToken(gFillRuleInfo[i].fName)) {
+            *fillRule = SkSVGFillRule(gFillRuleInfo[i].fType);
+            parsedValue = true;
+            break;
+        }
+    }
+
+    return parsedValue && this->parseEOSToken();
+}
+
+// https://www.w3.org/TR/SVG/painting.html#VisibilityProperty
+bool SkSVGAttributeParser::parseVisibility(SkSVGVisibility* visibility) {
+    static const struct {
+        SkSVGVisibility::Type fType;
+        const char*           fName;
+    } gVisibilityInfo[] = {
+        { SkSVGVisibility::Type::kVisible , "visible"  },
+        { SkSVGVisibility::Type::kHidden  , "hidden"   },
+        { SkSVGVisibility::Type::kCollapse, "collapse" },
+        { SkSVGVisibility::Type::kInherit , "inherit"  },
+    };
+
+    bool parsedValue = false;
+    for (const auto& parseInfo : gVisibilityInfo) {
+        if (this->parseExpectedStringToken(parseInfo.fName)) {
+            *visibility = SkSVGVisibility(parseInfo.fType);
+            parsedValue = true;
+            break;
+        }
+    }
+
+    return parsedValue && this->parseEOSToken();
+}
+
+// https://www.w3.org/TR/SVG/painting.html#StrokeDasharrayProperty
+bool SkSVGAttributeParser::parseDashArray(SkSVGDashArray* dashArray) {
+    bool parsedValue = false;
+    if (this->parseExpectedStringToken("none")) {
+        *dashArray = SkSVGDashArray(SkSVGDashArray::Type::kNone);
+        parsedValue = true;
+    } else if (this->parseExpectedStringToken("inherit")) {
+        *dashArray = SkSVGDashArray(SkSVGDashArray::Type::kInherit);
+        parsedValue = true;
+    } else {
+        SkTDArray<SkSVGLength> dashes;
+        for (;;) {
+            SkSVGLength dash;
+            // parseLength() also consumes trailing separators.
+            if (!this->parseLength(&dash)) {
+                break;
+            }
+
+            dashes.push(dash);
+            parsedValue = true;
+        }
+
+        if (parsedValue) {
+            *dashArray = SkSVGDashArray(std::move(dashes));
+        }
+    }
+
+    return parsedValue && this->parseEOSToken();
 }

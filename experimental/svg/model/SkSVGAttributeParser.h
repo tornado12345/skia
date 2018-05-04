@@ -15,6 +15,8 @@ public:
     SkSVGAttributeParser(const char[]);
 
     bool parseColor(SkSVGColorType*);
+    bool parseClipPath(SkSVGClip*);
+    bool parseFillRule(SkSVGFillRule*);
     bool parseNumber(SkSVGNumberType*);
     bool parseLength(SkSVGLength*);
     bool parseViewBox(SkSVGViewBoxType*);
@@ -25,6 +27,8 @@ public:
     bool parsePoints(SkSVGPointsType*);
     bool parseIRI(SkSVGStringType*);
     bool parseSpreadMethod(SkSVGSpreadMethod*);
+    bool parseVisibility(SkSVGVisibility*);
+    bool parseDashArray(SkSVGDashArray*);
 
 private:
     // Stack-only

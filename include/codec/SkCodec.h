@@ -9,10 +9,14 @@
 #define SkCodec_DEFINED
 
 #include "../private/SkTemplates.h"
+#include "../private/SkEncodedInfo.h"
+#include "SkCodecAnimation.h"
 #include "SkColor.h"
-#include "SkEncodedFormat.h"
-#include "SkEncodedInfo.h"
+#include "SkColorSpaceXform.h"
+#include "SkEncodedImageFormat.h"
+#include "SkEncodedOrigin.h"
 #include "SkImageInfo.h"
+#include "SkPixmap.h"
 #include "SkSize.h"
 #include "SkStream.h"
 #include "SkTypes.h"
@@ -21,8 +25,8 @@
 #include <vector>
 
 class SkColorSpace;
-class SkColorSpaceXform;
 class SkData;
+class SkFrameHolder;
 class SkPngChunkReader;
 class SkSampler;
 
@@ -35,7 +39,7 @@ class ColorCodecBench;
 /**
  *  Abstraction layer directly on top of an image codec.
  */
-class SkCodec : SkNoncopyable {
+class SK_API SkCodec : SkNoncopyable {
 public:
     /**
      *  Minimum number of bytes that must be buffered in SkStream input.
@@ -48,7 +52,65 @@ public:
      *  this many bytes, or by implementing rewind() to be able to rewind()
      *  after reading this many bytes.
      */
-    static size_t MinBufferedBytesNeeded();
+    static constexpr size_t MinBufferedBytesNeeded() { return 32; }
+
+    /**
+     *  Error codes for various SkCodec methods.
+     */
+    enum Result {
+        /**
+         *  General return value for success.
+         */
+        kSuccess,
+        /**
+         *  The input is incomplete. A partial image was generated.
+         */
+        kIncompleteInput,
+        /**
+         *  Like kIncompleteInput, except the input had an error.
+         *
+         *  If returned from an incremental decode, decoding cannot continue,
+         *  even with more data.
+         */
+        kErrorInInput,
+        /**
+         *  The generator cannot convert to match the request, ignoring
+         *  dimensions.
+         */
+        kInvalidConversion,
+        /**
+         *  The generator cannot scale to requested size.
+         */
+        kInvalidScale,
+        /**
+         *  Parameters (besides info) are invalid. e.g. NULL pixels, rowBytes
+         *  too small, etc.
+         */
+        kInvalidParameters,
+        /**
+         *  The input did not contain a valid image.
+         */
+        kInvalidInput,
+        /**
+         *  Fulfilling this request requires rewinding the input, which is not
+         *  supported for this input.
+         */
+        kCouldNotRewind,
+        /**
+         *  An internal error, such as OOM.
+         */
+        kInternalError,
+        /**
+         *  This method is not implemented by this codec.
+         *  FIXME: Perhaps this should be kUnsupported?
+         */
+        kUnimplemented,
+    };
+
+    /**
+     *  Readable string representing the error code.
+     */
+    static const char* ResultToString(Result);
 
     /**
      *  If this stream represents an encoded image that we know how to decode,
@@ -62,6 +124,9 @@ public:
      *  so falling back to reading would not provide more data. If peek()
      *  returns zero bytes, this call will instead attempt to read(). This
      *  will require that the stream can be rewind()ed.
+     *
+     *  If Result is not NULL, it will be set to either kSuccess if an SkCodec
+     *  is returned or a reason for the failure if NULL is returned.
      *
      *  If SkPngChunkReader is not NULL, take a ref and pass it to libpng if
      *  the image is a png.
@@ -81,7 +146,8 @@ public:
      *  If NULL is returned, the stream is deleted immediately. Otherwise, the
      *  SkCodec takes ownership of it, and will delete it when done with it.
      */
-    static SkCodec* NewFromStream(SkStream*, SkPngChunkReader* = NULL);
+    static std::unique_ptr<SkCodec> MakeFromStream(std::unique_ptr<SkStream>, Result* = nullptr,
+                                                   SkPngChunkReader* = nullptr);
 
     /**
      *  If this data represents an encoded image that we know how to decode,
@@ -99,10 +165,7 @@ public:
      *      If the PNG does not contain unknown chunks, the SkPngChunkReader
      *      will not be used or modified.
      */
-    static SkCodec* NewFromData(sk_sp<SkData>, SkPngChunkReader* = NULL);
-    static SkCodec* NewFromData(SkData* data, SkPngChunkReader* reader) {
-        return NewFromData(sk_ref_sp(data), reader);
-    }
+    static std::unique_ptr<SkCodec> MakeFromData(sk_sp<SkData>, SkPngChunkReader* = nullptr);
 
     virtual ~SkCodec();
 
@@ -111,26 +174,11 @@ public:
      */
     const SkImageInfo& getInfo() const { return fSrcInfo; }
 
-    const SkEncodedInfo& getEncodedInfo() const { return fEncodedInfo; }
-
-    enum Origin {
-        kTopLeft_Origin     = 1, // Default
-        kTopRight_Origin    = 2, // Reflected across y-axis
-        kBottomRight_Origin = 3, // Rotated 180
-        kBottomLeft_Origin  = 4, // Reflected across x-axis
-        kLeftTop_Origin     = 5, // Reflected across x-axis, Rotated 90 CCW
-        kRightTop_Origin    = 6, // Rotated 90 CW
-        kRightBottom_Origin = 7, // Reflected across x-axis, Rotated 90 CW
-        kLeftBottom_Origin  = 8, // Rotated 90 CCW
-        kDefault_Origin     = kTopLeft_Origin,
-        kLast_Origin        = kLeftBottom_Origin,
-    };
-
     /**
      *  Returns the image orientation stored in the EXIF data.
      *  If there is no EXIF data, or if we cannot read the EXIF data, returns kTopLeft.
      */
-    Origin getOrigin() const { return fOrigin; }
+    SkEncodedOrigin getOrigin() const { return fOrigin; }
 
     /**
      *  Return a size that approximately supports the desired scale factor.
@@ -176,51 +224,7 @@ public:
     /**
      *  Format of the encoded data.
      */
-    SkEncodedFormat getEncodedFormat() const { return this->onGetEncodedFormat(); }
-
-    /**
-     *  Used to describe the result of a call to getPixels().
-     *
-     *  Result is the union of possible results from subclasses.
-     */
-    enum Result {
-        /**
-         *  General return value for success.
-         */
-        kSuccess,
-        /**
-         *  The input is incomplete. A partial image was generated.
-         */
-        kIncompleteInput,
-        /**
-         *  The generator cannot convert to match the request, ignoring
-         *  dimensions.
-         */
-        kInvalidConversion,
-        /**
-         *  The generator cannot scale to requested size.
-         */
-        kInvalidScale,
-        /**
-         *  Parameters (besides info) are invalid. e.g. NULL pixels, rowBytes
-         *  too small, etc.
-         */
-        kInvalidParameters,
-        /**
-         *  The input did not contain a valid image.
-         */
-        kInvalidInput,
-        /**
-         *  Fulfilling this request requires rewinding the input, which is not
-         *  supported for this input.
-         */
-        kCouldNotRewind,
-        /**
-         *  This method is not implemented by this codec.
-         *  FIXME: Perhaps this should be kUnsupported?
-         */
-        kUnimplemented,
-    };
+    SkEncodedImageFormat getEncodedFormat() const { return this->onGetEncodedFormat(); }
 
     /**
      *  Whether or not the memory passed to getPixels is zero initialized.
@@ -248,14 +252,15 @@ public:
             : fZeroInitialized(kNo_ZeroInitialized)
             , fSubset(nullptr)
             , fFrameIndex(0)
-            , fHasPriorFrame(false)
+            , fPriorFrame(kNone)
+            , fPremulBehavior(SkTransferFunctionBehavior::kRespect)
         {}
 
-        ZeroInitialized             fZeroInitialized;
+        ZeroInitialized            fZeroInitialized;
         /**
          *  If not NULL, represents a subset of the original image to decode.
          *  Must be within the bounds returned by getInfo().
-         *  If the EncodedFormat is kWEBP_SkEncodedFormat (the only one which
+         *  If the EncodedFormat is SkEncodedImageFormat::kWEBP (the only one which
          *  currently supports subsets), the top and left values must be even.
          *
          *  In getPixels and incremental decode, we will attempt to decode the
@@ -269,33 +274,37 @@ public:
          *  subset left and subset width to decode partial scanlines on calls
          *  to getScanlines().
          */
-        const SkIRect*              fSubset;
+        const SkIRect*             fSubset;
 
         /**
          *  The frame to decode.
          *
          *  Only meaningful for multi-frame images.
          */
-        size_t fFrameIndex;
+        int                        fFrameIndex;
 
         /**
-         *  If true, the dst already contains the prior frame.
+         *  If not kNone, the dst already contains the prior frame at this index.
          *
          *  Only meaningful for multi-frame images.
          *
          *  If fFrameIndex needs to be blended with a prior frame (as reported by
          *  getFrameInfo[fFrameIndex].fRequiredFrame), the client can set this to
-         *  either true or false:
+         *  any non-kRestorePrevious frame in [fRequiredFrame, fFrameIndex) to
+         *  indicate that that frame is already in the dst. Options.fZeroInitialized
+         *  is ignored in this case.
          *
-         *  true means that the prior frame is already in the dst, and this
-         *  codec only needs to decode fFrameIndex and blend it with the dst.
-         *  Options.fZeroInitialized is ignored in this case.
-         *
-         *  false means that the dst does not contain the prior frame, so this
-         *  codec needs to first decode the prior frame (which in turn may need
-         *  to decode its prior frame).
+         *  If set to kNone, the codec will decode any necessary required frame(s) first.
          */
-        bool   fHasPriorFrame;
+        int                        fPriorFrame;
+
+        /**
+         *  Indicates whether we should do a linear premultiply or a legacy premultiply.
+         *
+         *  In the case where the dst SkColorSpace is nullptr, this flag is ignored and
+         *  we will always do a legacy premultiply.
+         */
+        SkTransferFunctionBehavior fPremulBehavior;
     };
 
     /**
@@ -324,26 +333,23 @@ public:
      *         reported by the codec, the color space transformation is
      *         a no-op.
      *
-     *  If info is kIndex8_SkColorType, then the caller must provide storage for up to 256
-     *  SkPMColor values in ctable. On success the generator must copy N colors into that storage,
-     *  (where N is the logical number of table entries) and set ctableCount to N.
-     *
-     *  If info is not kIndex8_SkColorType, then the last two parameters may be NULL. If ctableCount
-     *  is not null, it will be set to 0.
-     *
      *  If a scanline decode is in progress, scanline mode will end, requiring the client to call
      *  startScanlineDecode() in order to return to decoding scanlines.
      *
      *  @return Result kSuccess, or another value explaining the type of failure.
      */
-    Result getPixels(const SkImageInfo& info, void* pixels, size_t rowBytes, const Options*,
-                     SkPMColor ctable[], int* ctableCount);
+    Result getPixels(const SkImageInfo& info, void* pixels, size_t rowBytes, const Options*);
 
     /**
-     *  Simplified version of getPixels() that asserts that info is NOT kIndex8_SkColorType and
-     *  uses the default Options.
+     *  Simplified version of getPixels() that uses the default Options.
      */
-    Result getPixels(const SkImageInfo& info, void* pixels, size_t rowBytes);
+    Result getPixels(const SkImageInfo& info, void* pixels, size_t rowBytes) {
+        return this->getPixels(info, pixels, rowBytes, nullptr);
+    }
+
+    Result getPixels(const SkPixmap& pm, const Options* opts = nullptr) {
+        return this->getPixels(pm.info(), pm.writable_addr(), pm.rowBytes(), opts);
+    }
 
     /**
      *  If decoding to YUV is supported, this returns true.  Otherwise, this
@@ -396,25 +402,13 @@ public:
      *      if present, or the full image as described in dstInfo.
      *  @param options Contains decoding options, including if memory is zero
      *      initialized and whether to decode a subset.
-     *  @param ctable A pointer to a color table.  When dstInfo.colorType() is
-     *      kIndex8, this should be non-NULL and have enough storage for 256
-     *      colors.  The color table will be populated after decoding the palette.
-     *  @param ctableCount A pointer to the size of the color table.  When
-     *      dstInfo.colorType() is kIndex8, this should be non-NULL.  It will
-     *      be modified to the true size of the color table (<= 256) after
-     *      decoding the palette.
      *  @return Enum representing success or reason for failure.
      */
     Result startIncrementalDecode(const SkImageInfo& dstInfo, void* dst, size_t rowBytes,
-            const SkCodec::Options*, SkPMColor* ctable, int* ctableCount);
-
-    Result startIncrementalDecode(const SkImageInfo& dstInfo, void* dst, size_t rowBytes,
-            const SkCodec::Options* options) {
-        return this->startIncrementalDecode(dstInfo, dst, rowBytes, options, nullptr, nullptr);
-    }
+            const Options*);
 
     Result startIncrementalDecode(const SkImageInfo& dstInfo, void* dst, size_t rowBytes) {
-        return this->startIncrementalDecode(dstInfo, dst, rowBytes, nullptr, nullptr, nullptr);
+        return this->startIncrementalDecode(dstInfo, dst, rowBytes, nullptr);
     }
 
     /**
@@ -465,23 +459,16 @@ public:
      *      those of getInfo, this implies a scale.
      *  @param options Contains decoding options, including if memory is zero
      *      initialized.
-     *  @param ctable A pointer to a color table.  When dstInfo.colorType() is
-     *      kIndex8, this should be non-NULL and have enough storage for 256
-     *      colors.  The color table will be populated after decoding the palette.
-     *  @param ctableCount A pointer to the size of the color table.  When
-     *      dstInfo.colorType() is kIndex8, this should be non-NULL.  It will
-     *      be modified to the true size of the color table (<= 256) after
-     *      decoding the palette.
      *  @return Enum representing success or reason for failure.
      */
-    Result startScanlineDecode(const SkImageInfo& dstInfo, const SkCodec::Options* options,
-            SkPMColor ctable[], int* ctableCount);
+    Result startScanlineDecode(const SkImageInfo& dstInfo, const Options* options);
 
     /**
-     *  Simplified version of startScanlineDecode() that asserts that info is NOT
-     *  kIndex8_SkColorType and uses the default Options.
+     *  Simplified version of startScanlineDecode() that uses the default Options.
      */
-    Result startScanlineDecode(const SkImageInfo& dstInfo);
+    Result startScanlineDecode(const SkImageInfo& dstInfo) {
+        return this->startScanlineDecode(dstInfo, nullptr);
+    }
 
     /**
      *  Write the next countLines scanlines into dst.
@@ -584,9 +571,18 @@ public:
      */
     int outputScanline(int inputScanline) const;
 
+    /**
+     *  Return the number of frames in the image.
+     *
+     *  May require reading through the stream.
+     */
+    int getFrameCount() {
+        return this->onGetFrameCount();
+    }
+
     // The required frame for an independent frame is marked as
     // kNone.
-    static constexpr size_t kNone = static_cast<size_t>(-1);
+    static constexpr int kNone = -1;
 
     /**
      *  Information about individual frames in a multi-framed image.
@@ -594,18 +590,55 @@ public:
     struct FrameInfo {
         /**
          *  The frame that this frame needs to be blended with, or
-         *  kNone.
+         *  kNone if this frame is independent.
+         *
+         *  Note that this is the *earliest* frame that can be used
+         *  for blending. Any frame from [fRequiredFrame, i) can be
+         *  used, unless its fDisposalMethod is kRestorePrevious.
          */
-        size_t fRequiredFrame;
+        int fRequiredFrame;
 
         /**
          *  Number of milliseconds to show this frame.
          */
-        size_t fDuration;
+        int fDuration;
+
+        /**
+         *  Whether the end marker for this frame is contained in the stream.
+         *
+         *  Note: this does not guarantee that an attempt to decode will be complete.
+         *  There could be an error in the stream.
+         */
+        bool fFullyReceived;
+
+        /**
+         *  This is conservative; it will still return non-opaque if e.g. a
+         *  color index-based frame has a color with alpha but does not use it.
+         */
+        SkAlphaType fAlphaType;
+
+        /**
+         *  How this frame should be modified before decoding the next one.
+         */
+        SkCodecAnimation::DisposalMethod fDisposalMethod;
     };
 
     /**
-     *  Return info about the frames in the image.
+     *  Return info about a single frame.
+     *
+     *  Only supported by multi-frame images. Does not read through the stream,
+     *  so it should be called after getFrameCount() to parse any frames that
+     *  have not already been parsed.
+     */
+    bool getFrameInfo(int index, FrameInfo* info) const {
+        if (index < 0) {
+            return false;
+        }
+        return this->onGetFrameInfo(index, info);
+    }
+
+    /**
+     *  Return info about all the frames in the image.
      *
      *  May require reading through the stream to determine info about the
      *  frames (including the count).
@@ -614,9 +647,7 @@ public:
      *
      *  For single-frame images, this will return an empty vector.
      */
-    std::vector<FrameInfo> getFrameInfo() {
-        return this->onGetFrameInfo();
-    }
+    std::vector<FrameInfo> getFrameInfo();
 
     static constexpr int kRepetitionCountInfinite = -1;
 
@@ -634,24 +665,26 @@ public:
     }
 
 protected:
-    /**
-     *  Takes ownership of SkStream*
-     */
+    const SkEncodedInfo& getEncodedInfo() const { return fEncodedInfo; }
+
+    using XformFormat = SkColorSpaceXform::ColorFormat;
+
     SkCodec(int width,
             int height,
             const SkEncodedInfo&,
-            SkStream*,
+            XformFormat srcFormat,
+            std::unique_ptr<SkStream>,
             sk_sp<SkColorSpace>,
-            Origin = kTopLeft_Origin);
+            SkEncodedOrigin = kTopLeft_SkEncodedOrigin);
 
     /**
-     *  Takes ownership of SkStream*
      *  Allows the subclass to set the recommended SkImageInfo
      */
     SkCodec(const SkEncodedInfo&,
             const SkImageInfo&,
-            SkStream*,
-            Origin = kTopLeft_Origin);
+            XformFormat srcFormat,
+            std::unique_ptr<SkStream>,
+            SkEncodedOrigin = kTopLeft_SkEncodedOrigin);
 
     virtual SkISize onGetScaledDimensions(float /*desiredScale*/) const {
         // By default, scaling is not supported.
@@ -667,7 +700,7 @@ protected:
         return false;
     }
 
-    virtual SkEncodedFormat onGetEncodedFormat() const = 0;
+    virtual SkEncodedImageFormat onGetEncodedFormat() const = 0;
 
     /**
      * @param rowsDecoded When the encoded image stream is incomplete, this function
@@ -677,7 +710,6 @@ protected:
      */
     virtual Result onGetPixels(const SkImageInfo& info,
                                void* pixels, size_t rowBytes, const Options&,
-                               SkPMColor ctable[], int* ctableCount,
                                int* rowsDecoded) = 0;
 
     virtual bool onQueryYUV8(SkYUVSizeInfo*, SkYUVColorSpace*) const {
@@ -739,7 +771,6 @@ protected:
      * kN32_SkColorType: Transparent or Black, depending on the src alpha type
      * kRGB_565_SkColorType: Black
      * kGray_8_SkColorType: Black
-     * kIndex_8_SkColorType: First color in color table
      */
     virtual uint64_t onGetFillValue(const SkImageInfo& dstInfo) const;
 
@@ -761,7 +792,7 @@ protected:
 
     const SkImageInfo& dstInfo() const { return fDstInfo; }
 
-    const SkCodec::Options& options() const { return fOptions; }
+    const Options& options() const { return fOptions; }
 
     /**
      *  Returns the number of scanlines that have been decoded so far.
@@ -773,12 +804,24 @@ protected:
 
     virtual int onOutputScanline(int inputScanline) const;
 
-    bool initializeColorXform(const SkImageInfo& dstInfo);
-    SkColorSpaceXform* colorXform() const { return fColorXform.get(); }
+    bool initializeColorXform(const SkImageInfo& dstInfo, SkEncodedInfo::Alpha,
+                              SkTransferFunctionBehavior premulBehavior);
+    // Some classes never need a colorXform e.g.
+    // - ICO uses its embedded codec's colorXform
+    // - WBMP is just Black/White
+    virtual bool usesColorXform() const { return true; }
+    void applyColorXform(void* dst, const void* src, int count, SkAlphaType) const;
+    void applyColorXform(void* dst, const void* src, int count) const;
 
-    virtual std::vector<FrameInfo> onGetFrameInfo() {
-        // empty vector - this is not animated.
-        return {};
+    SkColorSpaceXform* colorXform() const { return fColorXform.get(); }
+    bool xformOnDecode() const { return fXformOnDecode; }
+
+    virtual int onGetFrameCount() {
+        return 1;
+    }
+
+    virtual bool onGetFrameInfo(int, FrameInfo*) const {
+        return false;
     }
 
     virtual int onGetRepetitionCount() {
@@ -788,19 +831,29 @@ protected:
 private:
     const SkEncodedInfo                fEncodedInfo;
     const SkImageInfo                  fSrcInfo;
+    const XformFormat                  fSrcXformFormat;
     std::unique_ptr<SkStream>          fStream;
     bool                               fNeedsRewind;
-    const Origin                       fOrigin;
+    const SkEncodedOrigin              fOrigin;
 
     SkImageInfo                        fDstInfo;
-    SkCodec::Options                   fOptions;
+    Options                            fOptions;
+    XformFormat                        fDstXformFormat; // Based on fDstInfo.
     std::unique_ptr<SkColorSpaceXform> fColorXform;
+    bool                               fXformOnDecode;
 
     // Only meaningful during scanline decodes.
     int                                fCurrScanline;
 
     bool                               fStartedIncrementalDecode;
 
+    /**
+     *  Return whether {srcColor, srcIsOpaque, srcCS} can convert to dst.
+     *
+     *  Will be called for the appropriate frame, prior to initializing the colorXform.
+     */
+    virtual bool conversionSupported(const SkImageInfo& dst, SkColorType srcColor,
+                                     bool srcIsOpaque, const SkColorSpace* srcCS) const;
     /**
      *  Return whether these dimensions are supported as a scale.
      *
@@ -814,14 +867,26 @@ private:
         return dim == fSrcInfo.dimensions() || this->onDimensionsSupported(dim);
     }
 
+    /**
+     *  For multi-framed images, return the object with information about the frames.
+     */
+    virtual const SkFrameHolder* getFrameHolder() const {
+        return nullptr;
+    }
+
+    /**
+     *  Check for a valid Options.fFrameIndex, and decode prior frames if necessary.
+     */
+    Result handleFrameIndex(const SkImageInfo&, void* pixels, size_t rowBytes, const Options&);
+
     // Methods for scanline decoding.
-    virtual SkCodec::Result onStartScanlineDecode(const SkImageInfo& /*dstInfo*/,
-            const SkCodec::Options& /*options*/, SkPMColor* /*ctable*/, int* /*ctableCount*/) {
+    virtual Result onStartScanlineDecode(const SkImageInfo& /*dstInfo*/,
+            const Options& /*options*/) {
         return kUnimplemented;
     }
 
     virtual Result onStartIncrementalDecode(const SkImageInfo& /*dstInfo*/, void*, size_t,
-            const SkCodec::Options&, SkPMColor*, int*) {
+            const Options&) {
         return kUnimplemented;
     }
 
@@ -864,5 +929,6 @@ private:
     friend class DM::CodecSrc;  // for fillIncompleteImage
     friend class SkSampledCodec;
     friend class SkIcoCodec;
+    friend class SkAndroidCodec; // for fEncodedInfo
 };
 #endif // SkCodec_DEFINED

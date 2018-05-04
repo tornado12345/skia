@@ -16,17 +16,10 @@ class CommandBufferGLTestContext : public GLTestContext {
 public:
     ~CommandBufferGLTestContext() override;
 
-    static CommandBufferGLTestContext *Create() {
-        CommandBufferGLTestContext *ctx = new CommandBufferGLTestContext;
-        if (!ctx->isValid()) {
-            delete ctx;
-            return nullptr;
-        }
-        return ctx;
-    }
-
-    static CommandBufferGLTestContext *Create(void *nativeWindow, int msaaSampleCount) {
-        CommandBufferGLTestContext *ctx = new CommandBufferGLTestContext(nativeWindow, msaaSampleCount);
+    static CommandBufferGLTestContext *Create(GLTestContext* shareContext) {
+        CommandBufferGLTestContext* cbShareContext =
+                reinterpret_cast<CommandBufferGLTestContext*>(shareContext);
+        CommandBufferGLTestContext *ctx = new CommandBufferGLTestContext(cbShareContext);
         if (!ctx->isValid()) {
             delete ctx;
             return nullptr;
@@ -43,16 +36,13 @@ public:
     int getSampleCount();
 
 private:
-    CommandBufferGLTestContext();
-
-    CommandBufferGLTestContext(void *nativeWindow, int msaaSampleCount);
-
-    void initializeGLContext(void *nativeWindow, const int *configAttribs,
-                             const int *surfaceAttribs);
+    CommandBufferGLTestContext(CommandBufferGLTestContext* shareContext);
 
     void destroyGLContext();
 
     void onPlatformMakeCurrent() const override;
+
+    std::function<void()> onPlatformGetAutoContextRestore() const override;
 
     void onPlatformSwapBuffers() const override;
 

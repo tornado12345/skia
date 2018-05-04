@@ -18,7 +18,6 @@ static void create_gradient(SkBitmap* bm) {
     float deltaB = 255.0f / height;
     float blue = 255.0f;
 
-    SkAutoLockPixels lock(*bm);
     for (int y = 0; y < height; y++) {
         *bm->getAddr32(0, y) = SkColorSetRGB(0, 0, (U8CPU) blue);
         blue -= deltaB;
@@ -84,7 +83,7 @@ protected:
         paint.setFilterQuality(fDoFilter ? kLow_SkFilterQuality
                                          : kNone_SkFilterQuality);
         if (fDoTrans) {
-            paint.setColor(SkColorSetARGBMacro(0x80, 0xFF, 0xFF, 0xFF));
+            paint.setColor(SkColorSetARGB(0x80, 0xFF, 0xFF, 0xFF));
         }
 
         SkRect r;

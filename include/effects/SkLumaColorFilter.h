@@ -28,13 +28,12 @@ class SK_API SkLumaColorFilter : public SkColorFilter {
 public:
     static sk_sp<SkColorFilter> Make();
 
-    void filterSpan(const SkPMColor src[], int count, SkPMColor[]) const override;
-
 #if SK_SUPPORT_GPU
-    sk_sp<GrFragmentProcessor> asFragmentProcessor(GrContext*, SkColorSpace*) const override;
+    std::unique_ptr<GrFragmentProcessor> asFragmentProcessor(
+            GrContext*, const GrColorSpaceInfo&) const override;
 #endif
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
     SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkLumaColorFilter)
 
 protected:
@@ -42,7 +41,8 @@ protected:
 
 private:
     SkLumaColorFilter();
-    bool onAppendStages(SkRasterPipeline*, bool shaderIsOpaque) const override;
+    void onAppendStages(SkRasterPipeline*, SkColorSpace*, SkArenaAlloc*,
+                        bool shaderIsOpaque) const override;
 
     typedef SkColorFilter INHERITED;
 };

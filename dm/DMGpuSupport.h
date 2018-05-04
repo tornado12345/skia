@@ -28,19 +28,6 @@ namespace DM {
 
 static const bool kGPUDisabled = false;
 
-static inline sk_sp<SkSurface> NewGpuSurface(
-        sk_gpu_test::GrContextFactory* grFactory,
-        sk_gpu_test::GrContextFactory::ContextType type,
-        sk_gpu_test::GrContextFactory::ContextOptions options,
-        SkImageInfo info,
-        int samples,
-        bool useDIText) {
-    uint32_t flags = useDIText ? SkSurfaceProps::kUseDeviceIndependentFonts_Flag : 0;
-    SkSurfaceProps props(flags, SkSurfaceProps::kLegacyFontHost_InitType);
-    return SkSurface::MakeRenderTarget(grFactory->get(type, options), SkBudgeted::kNo,
-                                       info, samples, &props);
-}
-
 }  // namespace DM
 
 #else// !SK_SUPPORT_GPU
@@ -60,10 +47,15 @@ public:
     void dumpGpuStats(SkString*) const {}
 };
 
+class SkCommandLineConfigGpu {
+public:
+    enum class SurfType;
+};
+
 namespace sk_gpu_test {
 class GrContextFactory {
 public:
-    GrContextFactory() {};
+    GrContextFactory() {}
     explicit GrContextFactory(const GrContextOptions&) {}
 
     typedef int ContextType;
@@ -72,18 +64,15 @@ public:
                              kANGLE_GL_ContextType      = 0,
                              kCommandBuffer_ContextType = 0,
                              kDebugGL_ContextType       = 0,
-                             kMESA_ContextType          = 0,
                              kNVPR_ContextType          = 0,
                              kNativeGL_ContextType      = 0,
                              kGL_ContextType            = 0,
                              kGLES_ContextType          = 0,
                              kNullGL_ContextType        = 0,
-                             kVulkan_ContextType        = 0;
+                             kVulkan_ContextType        = 0,
+                             kMetal_ContextType         = 0;
     static const int kContextTypeCnt = 1;
-    enum ContextOptions {
-        kNone_ContextOptions = 0,
-        kEnableNVPR_ContextOptions = 0x1,
-    };
+    enum class ContextOverrides {};
     void destroyContexts() {}
 
     void abandonContexts() {}
@@ -95,15 +84,6 @@ public:
 namespace DM {
 
 static const bool kGPUDisabled = true;
-
-static inline SkSurface* NewGpuSurface(sk_gpu_test::GrContextFactory*,
-                                       sk_gpu_test::GrContextFactory::ContextType,
-                                       sk_gpu_test::GrContextFactory::ContextOptions,
-                                       SkImageInfo,
-                                       int,
-                                       bool) {
-    return nullptr;
-}
 
 }  // namespace DM
 

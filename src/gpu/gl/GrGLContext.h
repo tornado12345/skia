@@ -23,49 +23,61 @@ namespace SkSL {
  * Encapsulates information about an OpenGL context including the OpenGL
  * version, the GrGLStandard type of the context, and GLSL version.
  */
-class GrGLContextInfo : public SkRefCnt {
+class GrGLContextInfo {
 public:
+    GrGLContextInfo(const GrGLContextInfo&) = delete;
+    GrGLContextInfo& operator=(const GrGLContextInfo&) = delete;
+
+    virtual ~GrGLContextInfo() {}
+
     GrGLStandard standard() const { return fInterface->fStandard; }
     GrGLVersion version() const { return fGLVersion; }
     GrGLSLGeneration glslGeneration() const { return fGLSLGeneration; }
     GrGLVendor vendor() const { return fVendor; }
     GrGLRenderer renderer() const { return fRenderer; }
+    GrGLANGLEBackend angleBackend() const { return fANGLEBackend; }
+    GrGLANGLEVendor angleVendor() const { return fANGLEVendor; }
+    GrGLANGLERenderer angleRenderer() const { return fANGLERenderer; }
     /** What driver is running our GL implementation? This is not necessarily related to the vendor.
         (e.g. Intel GPU being driven by Mesa) */
     GrGLDriver driver() const { return fDriver; }
     GrGLDriverVersion driverVersion() const { return fDriverVersion; }
     const GrGLCaps* caps() const { return fGLCaps.get(); }
-    GrGLCaps* caps() { return fGLCaps; }
+    GrGLCaps* caps() { return fGLCaps.get(); }
     bool hasExtension(const char* ext) const {
         return fInterface->hasExtension(ext);
     }
 
     const GrGLExtensions& extensions() const { return fInterface->fExtensions; }
 
-    virtual ~GrGLContextInfo() {}
-
 protected:
     struct ConstructorArgs {
-        const GrGLInterface*                fInterface;
+        sk_sp<const GrGLInterface>          fInterface;
         GrGLVersion                         fGLVersion;
         GrGLSLGeneration                    fGLSLGeneration;
         GrGLVendor                          fVendor;
         GrGLRenderer                        fRenderer;
         GrGLDriver                          fDriver;
         GrGLDriverVersion                   fDriverVersion;
+        GrGLANGLEBackend                    fANGLEBackend;
+        GrGLANGLEVendor                     fANGLEVendor;
+        GrGLANGLERenderer                   fANGLERenderer;
         const  GrContextOptions*            fContextOptions;
     };
 
-    GrGLContextInfo(const ConstructorArgs& args);
+    GrGLContextInfo(ConstructorArgs&&);
 
-    SkAutoTUnref<const GrGLInterface>   fInterface;
-    GrGLVersion                         fGLVersion;
-    GrGLSLGeneration                    fGLSLGeneration;
-    GrGLVendor                          fVendor;
-    GrGLRenderer                        fRenderer;
-    GrGLDriver                          fDriver;
-    GrGLDriverVersion                   fDriverVersion;
-    SkAutoTUnref<GrGLCaps>              fGLCaps;
+    sk_sp<const GrGLInterface> fInterface;
+    GrGLVersion                fGLVersion;
+    GrGLSLGeneration           fGLSLGeneration;
+    GrGLVendor                 fVendor;
+    GrGLRenderer               fRenderer;
+    GrGLDriver                 fDriver;
+    GrGLDriverVersion          fDriverVersion;
+    GrGLANGLEBackend           fANGLEBackend;
+    GrGLANGLEVendor            fANGLEVendor;
+    GrGLANGLERenderer          fANGLERenderer;
+    sk_sp<GrGLCaps>            fGLCaps;
 };
 
 /**
@@ -77,18 +89,16 @@ public:
      * Creates a GrGLContext from a GrGLInterface and the currently
      * bound OpenGL context accessible by the GrGLInterface.
      */
-    static GrGLContext* Create(const GrGLInterface* interface, const GrContextOptions& options);
+    static std::unique_ptr<GrGLContext> Make(sk_sp<const GrGLInterface>, const GrContextOptions&);
 
-    const GrGLInterface* interface() const { return fInterface; }
+    const GrGLInterface* interface() const { return fInterface.get(); }
 
     SkSL::Compiler* compiler() const;
 
     ~GrGLContext() override;
 
 private:
-    GrGLContext(const ConstructorArgs& args) 
-    : INHERITED(args)
-    , fCompiler(nullptr) {}
+    GrGLContext(ConstructorArgs&& args) : INHERITED(std::move(args)), fCompiler(nullptr) {}
 
     mutable SkSL::Compiler* fCompiler;
 

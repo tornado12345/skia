@@ -7,6 +7,8 @@
 
 #include "SkPaintImageFilter.h"
 #include "SkCanvas.h"
+#include "SkColorSpaceXformer.h"
+#include "SkImageFilterPriv.h"
 #include "SkReadBuffer.h"
 #include "SkSpecialImage.h"
 #include "SkSpecialSurface.h"
@@ -68,14 +70,20 @@ sk_sp<SkSpecialImage> SkPaintImageFilter::onFilterImage(SkSpecialImage* source,
     return surf->makeImageSnapshot();
 }
 
+sk_sp<SkImageFilter> SkPaintImageFilter::onMakeColorSpace(SkColorSpaceXformer* xformer) const {
+    SkPaint paint = xformer->apply(fPaint);
+    if (paint != fPaint) {
+        return SkPaintImageFilter::Make(paint, this->getCropRectIfSet());
+    }
+    return this->refMe();
+}
+
 bool SkPaintImageFilter::affectsTransparentBlack() const {
     return true;
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkPaintImageFilter::toString(SkString* str) const {
     str->appendf("SkPaintImageFilter: (");
     fPaint.toString(str);
     str->append(")");
 }
-#endif

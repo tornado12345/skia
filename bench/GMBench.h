@@ -18,7 +18,11 @@ class GMBench : public Benchmark {
 public:
     // Constructor takes ownership of the GM param.
     GMBench(skiagm::GM* gm);
-    virtual ~GMBench();
+    ~GMBench() override;
+
+    void modifyGrContextOptions(GrContextOptions* options) override {
+        return fGM->modifyGrContextOptions(options);
+    }
 
 protected:
     const char* onGetName() override;

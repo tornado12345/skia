@@ -28,6 +28,9 @@ public:
       kClamp_TileMode = 0,         /*!< Clamp to the image's edge pixels. */
       kRepeat_TileMode,        /*!< Wrap around to the image's opposite edge. */
       kClampToBlack_TileMode,  /*!< Fill with transparent black. */
+      kLast_TileMode = kClampToBlack_TileMode,
+
+      // TODO: remove kMax - it is non-standard but used by Chromium!
       kMax_TileMode = kClampToBlack_TileMode
     };
 
@@ -64,7 +67,7 @@ public:
                                      sk_sp<SkImageFilter> input,
                                      const CropRect* cropRect = nullptr);
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
     SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkMatrixConvolutionImageFilter)
 
 protected:
@@ -81,6 +84,7 @@ protected:
 
     sk_sp<SkSpecialImage> onFilterImage(SkSpecialImage* source, const Context&,
                                         SkIPoint* offset) const override;
+    sk_sp<SkImageFilter> onMakeColorSpace(SkColorSpaceXformer*) const override;
     SkIRect onFilterNodeBounds(const SkIRect&, const SkMatrix&, MapDirection) const override;
     bool affectsTransparentBlack() const override;
 

@@ -8,32 +8,16 @@
 #ifndef GrTest_DEFINED
 #define GrTest_DEFINED
 
+#include "GrBackendSurface.h"
 #include "GrContext.h"
-#include "GrRenderTargetContext.h"
+#include "GrDrawOpAtlas.h"
 
 namespace GrTest {
     /**
      * Forces the GrContext to use a small atlas which only has room for one plot and will thus
      * constantly be evicting entries
      */
-    void SetupAlwaysEvictAtlas(GrContext*);
-};
-
-/** TODO Please do not use this if you can avoid it.  We are in the process of deleting it.
-    Allows a test to temporarily draw to a GrOpList owned by a GrContext. Tests that use this
-    should be careful not to mix using the GrOpList directly and drawing via SkCanvas or
-    GrContext. In the future this object may provide some guards to prevent this. */
-class GrTestTarget {
-public:
-    GrTestTarget() {}
-
-    void init(GrContext*, sk_sp<GrRenderTargetContext>);
-
-    GrResourceProvider* resourceProvider() { return fContext->resourceProvider(); }
-
-private:
-    sk_sp<GrContext>             fContext;
-    sk_sp<GrRenderTargetContext> fRenderTargetContext;
+    void SetupAlwaysEvictAtlas(GrContext*, int dim = GrDrawOpAtlas::kGlyphMaxDim);
 };
 
 #endif

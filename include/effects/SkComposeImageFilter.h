@@ -16,7 +16,7 @@ public:
 
     SkRect computeFastBounds(const SkRect& src) const override;
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
     SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkComposeImageFilter)
 
 protected:
@@ -26,6 +26,7 @@ protected:
     }
     sk_sp<SkSpecialImage> onFilterImage(SkSpecialImage* source, const Context&,
                                         SkIPoint* offset) const override;
+    sk_sp<SkImageFilter> onMakeColorSpace(SkColorSpaceXformer*) const override;
     SkIRect onFilterBounds(const SkIRect&, const SkMatrix&, MapDirection) const override;
     bool onCanHandleComplexCTM() const override { return true; }
 

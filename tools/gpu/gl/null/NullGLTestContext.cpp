@@ -17,11 +17,14 @@
 namespace {
 class NullGLContext : public sk_gpu_test::GLTestContext {
 public:
-    NullGLContext(bool enableNVPR) { this->init(GrGLCreateNullInterface(enableNVPR)); }
-   ~NullGLContext() override { this->teardown(); }
+    NullGLContext(bool enableNVPR) {
+        this->init(sk_sp<const GrGLInterface>(GrGLCreateNullInterface(enableNVPR)));
+    }
+    ~NullGLContext() override { this->teardown(); }
 
 private:
     void onPlatformMakeCurrent() const override {}
+    std::function<void()> onPlatformGetAutoContextRestore() const override { return nullptr; }
     void onPlatformSwapBuffers() const override {}
     GrGLFuncPtr onPlatformGetProcAddress(const char*) const override { return nullptr; }
 };
@@ -29,7 +32,10 @@ private:
 }  // anonymous namespace
 
 namespace sk_gpu_test {
-GLTestContext* CreateNullGLTestContext(bool enableNVPR) {
+GLTestContext* CreateNullGLTestContext(bool enableNVPR, GLTestContext* shareContext) {
+    if (shareContext) {
+        return nullptr;
+    }
     GLTestContext* ctx = new NullGLContext(enableNVPR);
     if (ctx->isValid()) {
         return ctx;

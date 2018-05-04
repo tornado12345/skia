@@ -21,8 +21,6 @@
 #include "SkColorFilter.h"
 #include "SkTime.h"
 #include "SkTypeface.h"
-#include "SkXfermode.h"
-
 #include "SkStream.h"
 #include "SkColorPriv.h"
 
@@ -96,7 +94,6 @@ protected:
 
     SkView::Click* onFindClickHandler(SkScalar x, SkScalar y, unsigned) override {
         fAlpha = SkScalarRoundToInt(y);
-        this->inval(nullptr);
         return nullptr;
     }
 private:

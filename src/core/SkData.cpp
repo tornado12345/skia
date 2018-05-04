@@ -64,10 +64,7 @@ sk_sp<SkData> SkData::PrivateNewWithCopy(const void* srcOrNull, size_t length) {
     }
 
     const size_t actualLength = length + sizeof(SkData);
-    if (actualLength < length) {
-        // we overflowed
-        sk_throw();
-    }
+    SkASSERT_RELEASE(length < actualLength);  // Check for overflow.
 
     void* storage = ::operator new (actualLength);
     sk_sp<SkData> data(new (storage) SkData(length));
@@ -143,8 +140,7 @@ sk_sp<SkData> SkData::MakeFromFD(int fd) {
     if (nullptr == addr) {
         return nullptr;
     }
-
-    return SkData::MakeWithProc(addr, size, sk_mmap_releaseproc, nullptr);
+    return SkData::MakeWithProc(addr, size, sk_mmap_releaseproc, reinterpret_cast<void*>(size));
 }
 
 // assumes context is a SkData

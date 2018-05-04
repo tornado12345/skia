@@ -1,30 +1,27 @@
 Vulkan
 ======
 
-Skis has a Vulkan implementation of its GPU backend. The Vulkan backend can be built alongside the OpenGL backend. The client can select between the OpenGL and Vulkan implementation at runtime. The Vulkan backend has reached feature parity with the OpenGL backend. At this time we find that many Vulkan drivers have bugs that Skia triggers for which we have no workaround. We are reporting bugs to vendors as we find them.
+Skia has a Vulkan implementation of its GPU backend. The Vulkan backend can be
+built alongside the OpenGL backend. The client can select between the OpenGL
+and Vulkan implementation at runtime. The Vulkan backend has reached feature
+parity with the OpenGL backend. At this time we find that many Vulkan drivers
+have bugs that Skia triggers for which we have no workaround. We are reporting
+bugs to vendors as we find them.
 
-Build for Windows and Linux
----------------------------
-To build the Vulkan backend add skia_vulkan=1 to your GYP_DEFINES and rerun gyp_skia. For example:
-
-<!--?prettify lang=sh?-->
-     export GYP_DEFINES="$GYP_DEFINES skia_vulkan=1"
-     python ./gyp_skia
-
-The Vulkan SDK must be installed and the VULKAN_SDK environment variable must point to the installation location. The Windows installer will set the environment variable. However, on Linux it must be set after installation.
-
-Build as usual for your platform.
-
-
-Build for Android
+Windows and Linux
 -----------------
-The Vulkan backend will run on a device running the N release with Vulkan drivers. To build the Vulkan backend simply add --vulkan to the flags passed to ./platform_tools/android/bin/android_ninja
+To build the Vulkan backend, set `skia_vulkan_sdk` to the path to your Vulkan SDK in `args.gn`.
+This defaults to the environment variable `VULKAN_SDK`.
 
+Android
+-------
+The Vulkan backend can run on any device with Vulkan drivers, including all Android N+ devices.
+To build the Vulkan backend, set `ndk_api = 24` in `args.gn` to target Android N.
 
 Using the Vulkan Backend
 ------------------------
 
-To create a GrContext that is backed by Vulkan the client creates a Vulkan device and queue, initializes a GrVkBackendContext to describe the context, and then calls GrContext::Create:
+To create a GrContext that is backed by Vulkan the client creates a Vulkan device and queue, initializes a GrVkBackendContext to describe the context, and then calls GrContext::MakeVulkan:
 
 <!--?prettify lang=c++?-->
     sk_sp<GrVkBackendContext> vkContext = new GrVkBackendContext;
@@ -33,12 +30,27 @@ To create a GrContext that is backed by Vulkan the client creates a Vulkan devic
     ...
     vkBackendContext.fInterface.reset(GrVkCreateInterface(instance, vkPhysDevice, extensionFlags);
     ...
-  
-    sk_sp<GrContext> context = GrContext::Create(kVulkan_GrBackend, (GrBackendContext) vkBackendContext);
 
-When using the Vulkan backend the GrBackendObject field in GrBackendRenderTargetDesc and GrBackendTextureDesc is interpeted as a pointer to a GrVkImageInfo object. GrVkImageInfo specifies a VkImage and associated state (tiling, layout, format, etc). This allows the client to import externally created Vulkan images as destinations for Skia rendering via SkSurface factory functions or for to composite Skia rendered content using SkImage::getTextureHandle().
+    sk_sp<GrContext> context = GrContext::MakeVulkan(vkBackendContext);
 
-After getting a GrVkImageInfo* via getTextureHandle() or getRenderTargetHandle(), the client should check the fImageLayout field to know what layout Skia left the VkImage in before using the VkImage. If the client changes the layout of the VkImage, GrVkImageInfo::updateImageLayout(VkImageLayout layout) should be called before resuming Skia rendering.
+When using the Vulkan backend, GrVkImageInfo is used to construct GrBackendTexture
+and GrBackendRenderTarget objects that in turn are used to create SkSurface and SkImage
+objects that refer to VkImages created by the Skia client.
 
-The client is responsible for any synchronization or barriers needed before Skia performs I/O on a VkImage imported into Skia via GrVkImageInfo.
-Skia will assume it can start issuing commands referencing the VkImage without the need for additional synchronization.
+The GrBackendObject returned by SkImage::getTextureHandle(),
+SkSurface::getTextureHandle(), and SkSurface::getRenderTargetHandle() should be
+interpreted as a GrVkImageInfo*. This allows a client to get the backing VkImage
+of a SkImage or SkSurface.
+
+GrVkImageInfo specifies a VkImage and associated state (tiling, layout, format, etc).
+After getting a GrVkImageInfo* via getTextureHandle() or
+getRenderTargetHandle(), the client should check the fImageLayout field to know
+what layout Skia left the VkImage in before using the VkImage. If the client
+changes the layout of the VkImage,
+GrVkImageInfo::updateImageLayout(VkImageLayout layout) should be called before
+resuming Skia rendering.
+
+The client is responsible for any synchronization or barriers needed before
+Skia performs I/O on a VkImage imported into Skia via GrVkImageInfo.  Skia will
+assume it can start issuing commands referencing the VkImage without the need
+for additional synchronization.

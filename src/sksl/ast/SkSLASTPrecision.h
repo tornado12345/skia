@@ -4,7 +4,7 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
- 
+
 #ifndef SKSL_ASTPRECISION
 #define SKSL_ASTPRECISION
 
@@ -18,21 +18,21 @@ namespace SkSL {
  */
 struct ASTPrecision : public ASTDeclaration {
     // FIXME handle the type
-    ASTPrecision(Position position, Modifiers::Flag precision)
-    : INHERITED(position, kPrecision_Kind)
+    ASTPrecision(int offset, Modifiers::Flag precision)
+    : INHERITED(offset, kPrecision_Kind)
     , fPrecision(precision) {}
 
-    std::string description() const {
+    String description() const {
         switch (fPrecision) {
-            case Modifiers::kLowp_Flag: return "precision lowp float;";
-            case Modifiers::kMediump_Flag: return "precision mediump float;";
-            case Modifiers::kHighp_Flag: return "precision highp float;";
-            default: 
-                ASSERT(false); 
-                return "<error>";
+            case Modifiers::kLowp_Flag: return String("precision lowp float;");
+            case Modifiers::kMediump_Flag: return String("precision mediump float;");
+            case Modifiers::kHighp_Flag: return String("precision highp float;");
+            default:
+                ASSERT(false);
+                return String("<error>");
         }
         ASSERT(false);
-        return "<error>";
+        return String("<error>");
     }
 
     const Modifiers::Flag fPrecision;

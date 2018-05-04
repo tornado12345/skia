@@ -40,9 +40,9 @@ RecordingBench::RecordingBench(const char* name, const SkPicture* pic, bool useB
 {
     // If we're recording into an SkLiteDL, also record _from_ one.
     if (lite) {
-        fDL = SkLiteDL::New(fSrc->cullRect());
+        fDL.reset(new SkLiteDL());
         SkLiteRecorder r;
-        r.reset(fDL.get());
+        r.reset(fDL.get(), fSrc->cullRect().roundOut());
         fSrc->playback(&r);
     }
 }
@@ -51,10 +51,9 @@ void RecordingBench::onDraw(int loops, SkCanvas*) {
     if (fDL) {
         SkLiteRecorder rec;
         while (loops --> 0) {
-            sk_sp<SkLiteDL> dl = SkLiteDL::New(fSrc->cullRect());
-            rec.reset(dl.get());
+            SkLiteDL dl;
+            rec.reset(&dl, fSrc->cullRect().roundOut());
             fDL->draw(&rec);
-            dl->makeThreadsafe();
         }
 
     } else {
@@ -84,5 +83,31 @@ void PipingBench::onDraw(int loops, SkCanvas*) {
         fSrc->playback(serializer.beginWrite(fSrc->cullRect(), &stream));
         serializer.endWrite();
         stream.reset();
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+#include "SkSerialProcs.h"
+
+DeserializePictureBench::DeserializePictureBench(const char* name, sk_sp<SkData> data)
+    : fName(name)
+    , fEncodedPicture(std::move(data))
+{}
+
+const char* DeserializePictureBench::onGetName() {
+    return fName.c_str();
+}
+
+bool DeserializePictureBench::isSuitableFor(Backend backend) {
+    return backend == kNonRendering_Backend;
+}
+
+SkIPoint DeserializePictureBench::onGetSize() {
+    return SkIPoint::Make(128, 128);
+}
+
+void DeserializePictureBench::onDraw(int loops, SkCanvas*) {
+    for (int i = 0; i < loops; ++i) {
+        SkPicture::MakeFromData(fEncodedPicture.get());
     }
 }

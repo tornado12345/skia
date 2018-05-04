@@ -8,25 +8,27 @@
 #ifndef SkColorSpace_A2B_DEFINED
 #define SkColorSpace_A2B_DEFINED
 
-#include "SkColorSpace_Base.h"
-
+#include "SkColorLookUpTable.h"
+#include "SkColorSpace.h"
+#include "SkGammas.h"
 #include <vector>
 
 // An alternative SkColorSpace that represents all the color space data that
 // is stored in an A2B0 ICC tag. This allows us to use alternative profile
 // connection spaces (CIELAB instead of just CIEXYZ), use color-lookup-tables
 // to do color space transformations not representable as TRC functions or
-// matrix operations, as well as have multiple TRC functions. The CLUT also has
-// the potential to allow conversion from input color spaces with a different
-// number of channels such as CMYK (4) or GRAY (1), but that is not supported yet.
+// matrix operations, as well as have multiple TRC functions. The CLUT also
+// allows conversion between non-3-channel input color spaces ie CMYK(4) to
+// a workable PCS (ie XYZ).
 //
-// Currently AtoBType A2B0 tag types are supported. There are also lut8Type,
-// lut16Type and MPET (multi-processing-elements) A2B0 tags which allow you to
-// combine these 3 primitives (TRC, CLUT, matrix) in any order/quantitiy,
-// but support for that is not implemented.
-class SkColorSpace_A2B : public SkColorSpace_Base {
+// AtoBType, lut8Type and lut16Type A2B0 tag types are supported. There are
+// also MPET (multi-processing-elements) A2B0 tags in the standard which allow
+// you to combine these 3 primitives (TRC, CLUT, matrix) in any order/quantity.
+// MPET tags are currently unsupported by the MakeICC parser, could be supported
+// here by the nature of the design.
+class SkColorSpace_A2B : public SkColorSpace {
 public:
-    const SkMatrix44* toXYZD50() const override {
+    const SkMatrix44* onToXYZD50() const override {
         // the matrix specified in A2B0 profiles is not necessarily
         // a to-XYZ matrix, as to-Lab is supported as well so returning
         // that could be misleading. Additionally, B-curves are applied
@@ -35,54 +37,77 @@ public:
         return nullptr;
     }
 
-    uint32_t toXYZD50Hash() const override {
-        // See toXYZD50()'s comment.
+    uint32_t onToXYZD50Hash() const override {
+        // See onToXYZD50()'s comment.
         return 0;
     }
 
-    const SkMatrix44* fromXYZD50() const override {
-        // See toXYZD50()'s comment. Also, A2B0 profiles are not supported
+    const SkMatrix44* onFromXYZD50() const override {
+        // See onToXYZD50()'s comment. Also, A2B0 profiles are not supported
         // as destination color spaces, so an inverse matrix is never wanted.
         return nullptr;
     }
-    
-    bool onGammaCloseToSRGB() const override {
-        // There is no single gamma curve in an A2B0 profile
-        return false;
-    }
-    
-    bool onGammaIsLinear() const override {
-        // There is no single gamma curve in an A2B0 profile
-        return false;
+
+    // There is no single gamma curve in an A2B0 profile
+    SkGammaNamed onGammaNamed() const override { return kNonStandard_SkGammaNamed; }
+    bool onGammaCloseToSRGB() const override { return false; }
+    bool onGammaIsLinear() const override { return false; }
+    bool onIsNumericalTransferFn(SkColorSpaceTransferFn* coeffs) const override { return false; }
+
+    bool onIsCMYK() const override { return SkColorSpace::kCMYK_Type == fICCType; }
+
+    const SkData* onProfileData() const override { return fProfileData.get(); }
+
+    sk_sp<SkColorSpace> makeLinearGamma() const override {
+        // TODO: Analyze the extrema of our projection into XYZ and use suitable primaries?
+        // For now, just fall back to a default, because we don't have a good answer.
+        return SkColorSpace::MakeSRGBLinear();
     }
 
-    Type type() const override { return Type::kA2B; }
+    sk_sp<SkColorSpace> makeSRGBGamma() const override {
+        // See comment in makeLinearGamma
+        return SkColorSpace::MakeSRGB();
+    }
 
     class Element {
     public:
-        explicit Element(SkGammaNamed gammaNamed)
+        Element(SkGammaNamed gammaNamed, int channelCount)
             : fType(Type::kGammaNamed)
             , fGammaNamed(gammaNamed)
             , fMatrix(SkMatrix44::kUninitialized_Constructor)
-        {}
+            , fInputChannels(channelCount)
+            , fOutputChannels(channelCount) {
+            SkASSERT(gammaNamed != kNonStandard_SkGammaNamed);
+        }
 
         explicit Element(sk_sp<SkGammas> gammas)
             : fType(Type::kGammas)
             , fGammas(std::move(gammas))
-            , fMatrix(SkMatrix44::kUninitialized_Constructor)  
-        {}
+            , fMatrix(SkMatrix44::kUninitialized_Constructor)
+            , fInputChannels(fGammas->channels())
+            , fOutputChannels(fGammas->channels()) {
+            for (int i = 0; i < fGammas->channels(); ++i) {
+                if (SkGammas::Type::kTable_Type == fGammas->type(i)) {
+                    SkASSERT(fGammas->data(i).fTable.fSize >= 2);
+                }
+            }
+        }
 
         explicit Element(sk_sp<SkColorLookUpTable> colorLUT)
             : fType(Type::kCLUT)
             , fCLUT(std::move(colorLUT))
             , fMatrix(SkMatrix44::kUninitialized_Constructor)
+            , fInputChannels(fCLUT->inputChannels())
+            , fOutputChannels(fCLUT->outputChannels())
         {}
 
         explicit Element(const SkMatrix44& matrix)
             : fType(Type::kMatrix)
             , fMatrix(matrix)
+            , fInputChannels(3)
+            , fOutputChannels(3)
         {}
-    
+
         enum class Type {
             kGammaNamed,
             kGammas,
@@ -112,16 +137,22 @@ public:
             return fMatrix;
         }
 
+        int inputChannels() const { return fInputChannels; }
+
+        int outputChannels() const { return fOutputChannels; }
+
     private:
         Type                      fType;
         SkGammaNamed              fGammaNamed;
         sk_sp<SkGammas>           fGammas;
         sk_sp<SkColorLookUpTable> fCLUT;
         SkMatrix44                fMatrix;
+        int                       fInputChannels;
+        int                       fOutputChannels;
     };
-    const Element& element(size_t i) const { return fElements[i]; }
-    
-    size_t count() const { return fElements.size(); }
+    const Element& element(int i) const { return fElements[i]; }
+
+    int count() const { return (int)fElements.size(); }
 
     // the intermediate profile connection space that this color space
     // represents the transformation to
@@ -129,17 +160,22 @@ public:
         kLAB, // CIELAB
         kXYZ  // CIEXYZ
     };
-    
+
     PCS pcs() const { return fPCS; }
 
+    SkColorSpace::Type iccType() const { return fICCType; }
+
+    SkColorSpace_A2B(SkColorSpace::Type iccType, std::vector<Element> elements, PCS pcs,
+                     sk_sp<SkData> profileData);
+
 private:
-    SkColorSpace_A2B(PCS pcs, sk_sp<SkData> profileData, std::vector<Element> elements);
+    sk_sp<SkData>        fProfileData;
 
-    PCS                  fPCS;
+    SkColorSpace::Type   fICCType;
     std::vector<Element> fElements;
+    PCS                  fPCS;
 
-    friend class SkColorSpace;
-    typedef SkColorSpace_Base INHERITED;
+    friend class ColorSpaceXformTest;
 };
 
 #endif

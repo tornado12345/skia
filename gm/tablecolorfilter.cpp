@@ -6,6 +6,7 @@
  */
 
 #include "gm.h"
+#include "sk_tool_utils.h"
 #include "SkCanvas.h"
 #include "SkColorFilterImageFilter.h"
 #include "SkGradientShader.h"
@@ -262,7 +263,7 @@ protected:
         for (int y = 0; y < MODES; ++y) {
             canvas->save();
             for (int x = 0; x < MODES; ++x) {
-                paint.setColorFilter(SkColorFilter::MakeComposeFilter(filters[y], filters[x]));
+                paint.setColorFilter(filters[y]->makeComposed(filters[x]));
                 canvas->drawRect(r, paint);
                 canvas->translate(r.width() + spacer, 0);
             }

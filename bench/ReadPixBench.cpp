@@ -6,6 +6,7 @@
  */
 
 #include "Benchmark.h"
+#include "SkBitmap.h"
 #include "SkCanvas.h"
 
 
@@ -26,7 +27,7 @@ protected:
     void onDraw(int loops, SkCanvas* canvas) override {
         canvas->clear(SK_ColorBLACK);
 
-        SkISize size = canvas->getDeviceSize();
+        SkISize size = canvas->getBaseLayerSize();
 
         int offX = (size.width() - kWindowSize) / kNumStepsX;
         int offY = (size.height() - kWindowSize) / kNumStepsY;
@@ -42,12 +43,13 @@ protected:
 
         SkBitmap bitmap;
 
-        bitmap.setInfo(SkImageInfo::MakeN32Premul(kWindowSize, kWindowSize));
+        bitmap.allocPixels(SkImageInfo::MakeN32Premul(kWindowSize, kWindowSize));
 
         for (int i = 0; i < loops; i++) {
             for (int x = 0; x < kNumStepsX; ++x) {
                 for (int y = 0; y < kNumStepsY; ++y) {
-                    canvas->readPixels(&bitmap, x * offX, y * offY);
+                    canvas->readPixels(bitmap.info(), bitmap.getPixels(), bitmap.rowBytes(),
+                                       x * offX, y * offY);
                 }
             }
         }
@@ -60,7 +62,46 @@ private:
 
     typedef Benchmark INHERITED;
 };
+DEF_BENCH( return new ReadPixBench(); )
 
 ////////////////////////////////////////////////////////////////////////////////
+#include "SkBitmap.h"
+#include "SkPixmapPriv.h"
 
-DEF_BENCH( return new ReadPixBench(); )
+class PixmapOrientBench : public Benchmark {
+public:
+    PixmapOrientBench() {}
+
+protected:
+    void onDelayedSetup() override {
+        const SkImageInfo info = SkImageInfo::MakeN32Premul(2048, 1024);
+        fSrc.allocPixels(info);
+        fSrc.eraseColor(SK_ColorBLACK);
+        fDst.allocPixels(info.makeWH(info.height(), info.width()));
+    }
+
+    const char* onGetName() override {
+        return "orient_pixmap";
+    }
+
+    bool isSuitableFor(Backend backend) override {
+        return backend == kNonRendering_Backend;
+    }
+
+    void onDraw(int loops, SkCanvas*) override {
+        const SkPixmapPriv::OrientFlags flags = SkPixmapPriv::kSwapXY;
+
+        SkPixmap src, dst;
+        fSrc.peekPixels(&src);
+        fDst.peekPixels(&dst);
+        for (int i = 0; i < loops; ++i) {
+            SkPixmapPriv::Orient(dst, src, flags);
+        }
+    }
+
+private:
+    SkBitmap fSrc, fDst;
+
+    typedef Benchmark INHERITED;
+};
+DEF_BENCH( return new PixmapOrientBench(); )

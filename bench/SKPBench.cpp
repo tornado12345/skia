@@ -12,6 +12,7 @@
 
 #if SK_SUPPORT_GPU
 #include "GrContext.h"
+#include "GrContextPriv.h"
 #endif
 
 // These CPU tile sizes are not good per se, but they are similar to what Chrome uses.
@@ -50,8 +51,8 @@ const char* SKPBench::onGetUniqueName() {
 }
 
 void SKPBench::onPerCanvasPreDraw(SkCanvas* canvas) {
-    SkIRect bounds;
-    SkAssertResult(canvas->getClipDeviceBounds(&bounds));
+    SkIRect bounds = canvas->getDeviceClipBounds();
+    SkAssertResult(!bounds.isEmpty());
 
     const bool gpu = canvas->getGrContext() != nullptr;
     int tileW = gpu ? FLAGS_GPUbenchTileW : FLAGS_CPUbenchTileW,
@@ -120,7 +121,7 @@ void SKPBench::onDraw(int loops, SkCanvas* canvas) {
             break;
         }
 #if SK_SUPPORT_GPU
-        // Ensure the GrContext doesn't batch across draw loops.
+        // Ensure the GrContext doesn't combine ops across draw loops.
         if (GrContext* context = canvas->getGrContext()) {
             context->flush();
         }
@@ -135,7 +136,7 @@ void SKPBench::drawMPDPicture() {
         SkMatrix trans;
         trans.setTranslate(-fTileRects[j].fLeft/fScale,
                            -fTileRects[j].fTop/fScale);
-        mpd.add(fSurfaces[j]->getCanvas(), fPic, &trans);
+        mpd.add(fSurfaces[j]->getCanvas(), fPic.get(), &trans);
     }
 
     mpd.draw();
@@ -149,7 +150,7 @@ void SKPBench::drawPicture() {
     for (int j = 0; j < fTileRects.count(); ++j) {
         const SkMatrix trans = SkMatrix::MakeTrans(-fTileRects[j].fLeft / fScale,
                                                    -fTileRects[j].fTop / fScale);
-        fSurfaces[j]->getCanvas()->drawPicture(fPic, &trans, nullptr);
+        fSurfaces[j]->getCanvas()->drawPicture(fPic.get(), &trans, nullptr);
     }
 
     for (int j = 0; j < fTileRects.count(); ++j) {
@@ -162,13 +163,13 @@ void SKPBench::drawPicture() {
 static void draw_pic_for_stats(SkCanvas* canvas, GrContext* context, const SkPicture* picture,
                                SkTArray<SkString>* keys, SkTArray<double>* values,
                                const char* tag) {
-    context->resetGpuStats();
+    context->contextPriv().resetGpuStats();
     canvas->drawPicture(picture);
     canvas->flush();
 
     int offset = keys->count();
-    context->dumpGpuStatsKeyValuePairs(keys, values);
-    context->dumpCacheStatsKeyValuePairs(keys, values);
+    context->contextPriv().dumpGpuStatsKeyValuePairs(keys, values);
+    context->contextPriv().dumpCacheStatsKeyValuePairs(keys, values);
 
     // append tag, but only to new tags
     for (int i = offset; i < keys->count(); i++, offset++) {
@@ -189,11 +190,11 @@ void SKPBench::getGpuStats(SkCanvas* canvas, SkTArray<SkString>* keys, SkTArray<
     context->flush();
     context->freeGpuResources();
     context->resetContext();
-    context->getGpu()->resetShaderCacheForTesting();
-    draw_pic_for_stats(canvas, context, fPic, keys, values, "first_frame");
+    context->contextPriv().getGpu()->resetShaderCacheForTesting();
+    draw_pic_for_stats(canvas, context, fPic.get(), keys, values, "first_frame");
 
     // draw second frame
-    draw_pic_for_stats(canvas, context, fPic, keys, values, "second_frame");
+    draw_pic_for_stats(canvas, context, fPic.get(), keys, values, "second_frame");
 
 #endif
 }

@@ -14,9 +14,7 @@
 #include "SkTypes.h"
 
 #include <dwrite.h>
-#if SK_HAS_DWRITE_2_H
 #include <dwrite_2.h>
-#endif
 
 class SkGlyph;
 class SkDescriptor;
@@ -26,7 +24,7 @@ public:
     SkScalerContext_DW(sk_sp<DWriteFontTypeface>,
                        const SkScalerContextEffects&,
                        const SkDescriptor*);
-    virtual ~SkScalerContext_DW();
+    ~SkScalerContext_DW() override;
 
 protected:
     unsigned generateGlyphCount() override;
@@ -34,7 +32,7 @@ protected:
     void generateAdvance(SkGlyph* glyph) override;
     void generateMetrics(SkGlyph* glyph) override;
     void generateImage(const SkGlyph& glyph) override;
-    void generatePath(const SkGlyph& glyph, SkPath* path) override;
+    bool generatePath(SkGlyphID glyph, SkPath* path) override;
     void generateFontMetrics(SkPaint::FontMetrics*) override;
 
 private:
@@ -53,25 +51,15 @@ private:
         return static_cast<DWriteFontTypeface*>(this->getTypeface());
     }
 
-#if SK_HAS_DWRITE_2_H
     bool getColorGlyphRun(const SkGlyph& glyph, IDWriteColorGlyphRunEnumerator** colorGlyph);
 
     void generateColorGlyphImage(const SkGlyph& glyph);
-#endif
 
     SkTDArray<uint8_t> fBits;
     /** The total matrix without the text height scale. */
     SkMatrix fSkXform;
     /** The total matrix without the text height scale. */
     DWRITE_MATRIX fXform;
-    /** The non-rotational part of total matrix without the text height scale.
-     *  This is used to find the magnitude of gdi compatible advances.
-     */
-    DWRITE_MATRIX fGsA;
-    /** The inverse of the rotational part of the total matrix.
-     *  This is used to find the direction of gdi compatible advances.
-     */
-    SkMatrix fG_inv;
     /** The text size to render with. */
     SkScalar fTextSizeRender;
     /** The text size to measure with. */
@@ -80,10 +68,9 @@ private:
     DWRITE_RENDERING_MODE fRenderingMode;
     DWRITE_TEXTURE_TYPE fTextureType;
     DWRITE_MEASURING_MODE fMeasuringMode;
-#if SK_HAS_DWRITE_2_H
-    SkTScopedComPtr<IDWriteFactory2> fFactory2;
+    DWRITE_TEXT_ANTIALIAS_MODE fAntiAliasMode;
+    DWRITE_GRID_FIT_MODE fGridFitMode;
     bool fIsColorFont;
-#endif
 };
 
 #endif

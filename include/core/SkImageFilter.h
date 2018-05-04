@@ -20,6 +20,7 @@
 class GrContext;
 class GrFragmentProcessor;
 class SkColorFilter;
+class SkColorSpaceXformer;
 struct SkIPoint;
 class SkSpecialImage;
 class SkImageFilterCache;
@@ -65,6 +66,16 @@ public:
         SkImageFilterCache* cache() const { return fCache; }
         const OutputProperties& outputProperties() const { return fOutputProperties; }
 
+        /**
+         *  Since a context can be build directly, its constructor has no chance to
+         *  "return null" if it's given invalid or unsupported inputs. Call this to
+         *  know of the the context can be used.
+         *
+         *  The SkImageFilterCache Key, for example, requires a finite ctm (no infinities
+         *  or NaN), so that test is part of isValid.
+         */
+        bool isValid() const { return fCTM.isFinite(); }
+
     private:
         SkMatrix               fCTM;
         SkIRect                fClipBounds;
@@ -86,21 +97,19 @@ public:
             : fRect(rect), fFlags(flags) {}
         uint32_t flags() const { return fFlags; }
         const SkRect& rect() const { return fRect; }
-#ifndef SK_IGNORE_TO_STRING
         void toString(SkString* str) const;
-#endif
 
         /**
          *  Apply this cropRect to the imageBounds. If a given edge of the cropRect is not
          *  set, then the corresponding edge from imageBounds will be used. If "embiggen"
          *  is true, the crop rect is allowed to enlarge the size of the rect, otherwise
-         *  it may only reduce the rect. Filters that can affect transparent black should 
+         *  it may only reduce the rect. Filters that can affect transparent black should
          *  pass "true", while all other filters should pass "false".
          *
          *  Note: imageBounds is in "device" space, as the output cropped rectangle will be,
          *  so the matrix is ignored for those. It is only applied the croprect's bounds.
          */
-        void applyTo(const SkIRect& imageBounds, const SkMatrix&, bool embiggen,
+        void applyTo(const SkIRect& imageBounds, const SkMatrix& matrix, bool embiggen,
                      SkIRect* cropped) const;
 
     private:
@@ -129,11 +138,12 @@ public:
      *  TODO: Right now the imagefilters sometimes return empty result bitmaps/
      *        specialimages. That doesn't seem quite right.
      */
-    sk_sp<SkSpecialImage> filterImage(SkSpecialImage* src, const Context&, SkIPoint* offset) const;
+    sk_sp<SkSpecialImage> filterImage(SkSpecialImage* src, const Context& context,
+                                      SkIPoint* offset) const;
 
     enum MapDirection {
         kForward_MapDirection,
-        kReverse_MapDirection
+        kReverse_MapDirection,
     };
     /**
      * Map a device-space rect recursively forward or backward through the
@@ -151,7 +161,7 @@ public:
 
 #if SK_SUPPORT_GPU
     static sk_sp<SkSpecialImage> DrawWithFP(GrContext* context,
-                                            sk_sp<GrFragmentProcessor> fp,
+                                            std::unique_ptr<GrFragmentProcessor> fp,
                                             const SkIRect& bounds,
                                             const OutputProperties& outputProperties);
 #endif
@@ -172,9 +182,7 @@ public:
         return this->isColorFilterNode(filterPtr);
     }
 
-    static sk_sp<SkImageFilter> MakeBlur(SkScalar sigmaX, SkScalar sigmaY,
-                                         sk_sp<SkImageFilter> input,
-                                         const CropRect* cropRect = nullptr);
+    void removeKey(const SkImageFilterCacheKey& key) const;
 
     /**
      *  Returns true (and optionally returns a ref'd filter) if this imagefilter can be completely
@@ -212,7 +220,7 @@ public:
     CropRect getCropRect() const { return fCropRect; }
 
     // Default impl returns union of all input bounds.
-    virtual SkRect computeFastBounds(const SkRect&) const;
+    virtual SkRect computeFastBounds(const SkRect& bounds) const;
 
     // Can this filter DAG compute the resulting bounds of an object-space rectangle?
     bool canComputeFastBounds() const;
@@ -221,7 +229,7 @@ public:
      *  If this filter can be represented by another filter + a localMatrix, return that filter,
      *  else return null.
      */
-    sk_sp<SkImageFilter> makeWithLocalMatrix(const SkMatrix&) const;
+    sk_sp<SkImageFilter> makeWithLocalMatrix(const SkMatrix& matrix) const;
 
     /**
      *  ImageFilters can natively handle scaling and translate components in the CTM. Only some of
@@ -237,7 +245,7 @@ public:
                                                  SkFilterQuality quality,
                                                  sk_sp<SkImageFilter> input);
 
-    SK_TO_STRING_PUREVIRT()
+    virtual void toString(SkString* str) const = 0;
     SK_DEFINE_FLATTENABLE_TYPE(SkImageFilter)
     SK_DECLARE_FLATTENABLE_REGISTRAR_GROUP()
 
@@ -268,9 +276,9 @@ protected:
         void allocInputs(int count);
     };
 
-    SkImageFilter(sk_sp<SkImageFilter>* inputs, int inputCount, const CropRect* cropRect);
+    SkImageFilter(sk_sp<SkImageFilter> const* inputs, int inputCount, const CropRect* cropRect);
 
-    virtual ~SkImageFilter();
+    ~SkImageFilter() override;
 
     /**
      *  Constructs a new SkImageFilter read from an SkReadBuffer object.
@@ -282,6 +290,10 @@ protected:
     explicit SkImageFilter(int inputCount, SkReadBuffer& rb);
 
     void flatten(SkWriteBuffer&) const override;
+
+    const CropRect* getCropRectIfSet() const {
+        return this->cropRectIsSet() ? &fCropRect : nullptr;
+    }
 
     /**
      *  This is the virtual which should be overridden by the derived class
@@ -339,7 +351,7 @@ protected:
     // calls filterImage() on that input, and returns the result.
     sk_sp<SkSpecialImage> filterInput(int index,
                                       SkSpecialImage* src,
-                                      const Context&, 
+                                      const Context&,
                                       SkIPoint* offset) const;
 
     /**
@@ -386,11 +398,36 @@ protected:
      */
     Context mapContext(const Context& ctx) const;
 
+#if SK_SUPPORT_GPU
+    /**
+     *  Returns a version of the passed-in image (possibly the original), that is in a colorspace
+     *  with the same gamut as the one from the OutputProperties. This allows filters that do many
+     *  texture samples to guarantee that any color space conversion has happened before running.
+     */
+    static sk_sp<SkSpecialImage> ImageToColorSpace(SkSpecialImage* src, const OutputProperties&);
+#endif
+
+    /**
+     *  Returns an image filter transformed into a new color space via the |xformer|.
+     */
+    sk_sp<SkImageFilter> makeColorSpace(SkColorSpaceXformer* xformer) const {
+        return this->onMakeColorSpace(xformer);
+    }
+    virtual sk_sp<SkImageFilter> onMakeColorSpace(SkColorSpaceXformer*) const = 0;
+
+    sk_sp<SkImageFilter> refMe() const {
+        return sk_ref_sp(const_cast<SkImageFilter*>(this));
+    }
+
 private:
+    // For makeColorSpace().
+    friend class SkColorSpaceXformer;
+
     friend class SkGraphics;
+
     static void PurgeCache();
 
-    void init(sk_sp<SkImageFilter>* inputs, int inputCount, const CropRect* cropRect);
+    void init(sk_sp<SkImageFilter> const* inputs, int inputCount, const CropRect* cropRect);
 
     bool usesSrcInput() const { return fUsesSrcInput; }
     virtual bool affectsTransparentBlack() const { return false; }
@@ -400,20 +437,8 @@ private:
     bool fUsesSrcInput;
     CropRect fCropRect;
     uint32_t fUniqueID; // Globally unique
-    mutable SkTArray<SkImageFilterCacheKey> fCacheKeys;
-    mutable SkMutex fMutex;
+
     typedef SkFlattenable INHERITED;
 };
-
-/**
- *  Helper to unflatten the common data, and return NULL if we fail.
- */
-#define SK_IMAGEFILTER_UNFLATTEN_COMMON(localVar, expectedCount)    \
-    Common localVar;                                                \
-    do {                                                            \
-        if (!localVar.unflatten(buffer, expectedCount)) {           \
-            return NULL;                                            \
-        }                                                           \
-    } while (0)
 
 #endif

@@ -5,6 +5,7 @@
  * found in the LICENSE file.
  */
 
+#include "SkArenaAlloc.h"
 #include "SkBitmap.h"
 #include "SkBitmapDevice.h"
 #include "SkCanvas.h"
@@ -15,8 +16,6 @@
 #include "SkRect.h"
 #include "SkRefCnt.h"
 #include "SkScalar.h"
-#include "SkSmallAllocator.h"
-#include "SkXfermode.h"
 #include "Test.h"
 
 static SkBitmap make_bm(int w, int h) {
@@ -28,12 +27,13 @@ static SkBitmap make_bm(int w, int h) {
 // TODO: can this be derived from SkBaseDevice?
 class FakeDevice : public SkBitmapDevice {
 public:
-    FakeDevice() : INHERITED(make_bm(100, 100), SkSurfaceProps(0, kUnknown_SkPixelGeometry)) {
+    FakeDevice() : INHERITED(make_bm(100, 100), SkSurfaceProps(0, kUnknown_SkPixelGeometry),
+                             nullptr, nullptr) {
     }
 
-    void drawRect(const SkDraw& draw, const SkRect& r, const SkPaint& paint) override {
-        fLastMatrix = *draw.fMatrix;
-        this->INHERITED::drawRect(draw, r, paint);
+    void drawRect(const SkRect& r, const SkPaint& paint) override {
+        fLastMatrix = this->ctm();
+        this->INHERITED::drawRect(r, paint);
     }
 
     SkMatrix fLastMatrix;
@@ -56,12 +56,11 @@ static void test_frontToBack(skiatest::Reporter* reporter) {
     layerPaint->setBlendMode(SkBlendMode::kSrc);
 
     FakeDevice device;
-    SkCanvas canvas(&device);
+    SkCanvas canvas(sk_ref_sp(&device));
     SkPaint paint;
     auto looper(looperBuilder.detach());
-    SkSmallAllocator<1, 32> allocator;
-    void* buffer = allocator.reserveT<SkDrawLooper::Context>(looper->contextSize());
-    SkDrawLooper::Context* context = looper->createContext(&canvas, buffer);
+    SkArenaAlloc alloc{48};
+    SkDrawLooper::Context* context = looper->makeContext(&canvas, &alloc);
 
     // The back layer should come first.
     REPORTER_ASSERT(reporter, context->next(&canvas, &paint));
@@ -96,12 +95,11 @@ static void test_backToFront(skiatest::Reporter* reporter) {
     layerPaint->setBlendMode(SkBlendMode::kSrc);
 
     FakeDevice device;
-    SkCanvas canvas(&device);
+    SkCanvas canvas(sk_ref_sp(&device));
     SkPaint paint;
     auto looper(looperBuilder.detach());
-    SkSmallAllocator<1, 32> allocator;
-    void* buffer = allocator.reserveT<SkDrawLooper::Context>(looper->contextSize());
-    SkDrawLooper::Context* context = looper->createContext(&canvas, buffer);
+    SkArenaAlloc alloc{48};
+    SkDrawLooper::Context* context = looper->makeContext(&canvas, &alloc);
 
     // The back layer should come first.
     REPORTER_ASSERT(reporter, context->next(&canvas, &paint));
@@ -136,12 +134,11 @@ static void test_mixed(skiatest::Reporter* reporter) {
     layerPaint->setBlendMode(SkBlendMode::kSrc);
 
     FakeDevice device;
-    SkCanvas canvas(&device);
+    SkCanvas canvas(sk_ref_sp(&device));
     SkPaint paint;
     sk_sp<SkDrawLooper> looper(looperBuilder.detach());
-    SkSmallAllocator<1, 32> allocator;
-    void* buffer = allocator.reserveT<SkDrawLooper::Context>(looper->contextSize());
-    SkDrawLooper::Context* context = looper->createContext(&canvas, buffer);
+    SkArenaAlloc alloc{48};
+    SkDrawLooper::Context* context = looper->makeContext(&canvas, &alloc);
 
     // The back layer should come first.
     REPORTER_ASSERT(reporter, context->next(&canvas, &paint));

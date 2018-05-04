@@ -5,9 +5,12 @@
  * found in the LICENSE file.
  */
 
+#include "Test.h"
+
+#ifdef SK_SUPPORT_PDF
+
 #include "SkDeflate.h"
 #include "SkRandom.h"
-#include "Test.h"
 
 namespace {
 
@@ -25,7 +28,7 @@ void skia_free_func(void*, void* address) { sk_free(address); }
  *  Use the un-deflate compression algorithm to decompress the data in src,
  *  returning the result.  Returns nullptr if an error occurs.
  */
-SkStreamAsset* stream_inflate(skiatest::Reporter* reporter, SkStream* src) {
+std::unique_ptr<SkStreamAsset> stream_inflate(skiatest::Reporter* reporter, SkStream* src) {
     SkDynamicMemoryWStream decompressedDynamicMemoryWStream;
     SkWStream* dst = &decompressedDynamicMemoryWStream;
 
@@ -162,3 +165,5 @@ DEF_TEST(SkPDF_DeflateWStream, r) {
     SkDeflateWStream emptyDeflateWStream(nullptr);
     REPORTER_ASSERT(r, !emptyDeflateWStream.writeText("FOO"));
 }
+
+#endif

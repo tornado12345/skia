@@ -8,6 +8,7 @@
 package org.skia.viewer;
 
 import android.app.Application;
+import android.content.res.AssetManager;
 
 public class ViewerApplication extends Application {
     private long mNativeHandle = 0;
@@ -15,17 +16,16 @@ public class ViewerApplication extends Application {
     private String mStateJsonStr, mTitle;
 
     static {
-        System.loadLibrary("skia_android");
         System.loadLibrary("viewer");
     }
 
-    private native long createNativeApp();
+    private native long createNativeApp(AssetManager assetManager);
     private native void destroyNativeApp(long handle);
 
     @Override
     public void onCreate() {
         super.onCreate();
-        mNativeHandle = createNativeApp();
+        mNativeHandle = createNativeApp(this.getResources().getAssets());
     }
 
     @Override

@@ -15,10 +15,12 @@
 
 #if SK_SUPPORT_GPU
 #include "GrContext.h"
-#include "GrTexture.h"
+#include "GrContextPriv.h"
+#include "GrProxyProvider.h"
+#include "GrTextureProxy.h"
+#include "ProxyUtils.h"
 
 static const int DEV_W = 10, DEV_H = 10;
-static const SkIRect DEV_RECT = SkIRect::MakeWH(DEV_W, DEV_H);
 static const uint8_t TOL = 0x4;
 
 static void check_component(skiatest::Reporter* reporter, uint8_t control, uint8_t test) {
@@ -94,36 +96,41 @@ static void check_565(skiatest::Reporter* reporter,
     }
 }
 
-template <typename T>
-void runTest(skiatest::Reporter* reporter, GrContext* context,
-             T val1, T val2, int arraySize, GrPixelConfig config) {
-    SkTDArray<T> controlPixelData;
-    // We will read back into an 8888 buffer since 565/4444 read backes aren't supported
+static void run_test(skiatest::Reporter* reporter, GrContext* context, int arraySize,
+                     SkColorType colorType) {
+    SkTDArray<uint16_t> controlPixelData;
+    // We will read back into an 8888 buffer since 565/4444 read backs aren't supported
     SkTDArray<GrColor> readBuffer;
     controlPixelData.setCount(arraySize);
     readBuffer.setCount(arraySize);
 
     for (int i = 0; i < arraySize; i += 2) {
-        controlPixelData[i] = val1;
-        controlPixelData[i + 1] = val2;
+        controlPixelData[i] = 0xFF00;
+        controlPixelData[i + 1] = 0xFA62;
     }
 
-    for (int origin = 0; origin < 2; ++origin) {
-        GrSurfaceDesc desc;
-        desc.fFlags = kNone_GrSurfaceFlags;
-        desc.fWidth = DEV_W;
-        desc.fHeight = DEV_H;
-        desc.fConfig = config;
-        desc.fOrigin = 0 == origin ?
-            kTopLeft_GrSurfaceOrigin : kBottomLeft_GrSurfaceOrigin;
-        sk_sp<GrTexture> fpTexture(context->textureProvider()->createTexture(
-            desc, SkBudgeted::kNo, controlPixelData.begin(), 0));
-        SkASSERT(fpTexture);
-        fpTexture->readPixels(0, 0, DEV_W, DEV_H, kRGBA_8888_GrPixelConfig, readBuffer.begin(), 0);
-        if (kRGBA_4444_GrPixelConfig == config) {
+    const SkImageInfo dstInfo =
+            SkImageInfo::Make(DEV_W, DEV_H, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+
+    for (auto origin : { kTopLeft_GrSurfaceOrigin, kBottomLeft_GrSurfaceOrigin }) {
+        auto proxy = sk_gpu_test::MakeTextureProxyFromData(context, false, DEV_W, DEV_H,
+                                                           SkColorTypeToGrColorType(colorType),
+                                                           origin, controlPixelData.begin(), 0);
+        SkASSERT(proxy);
+
+        sk_sp<GrSurfaceContext> sContext = context->contextPriv().makeWrappedSurfaceContext(
+                                                                        std::move(proxy));
+
+        if (!sContext->readPixels(dstInfo, readBuffer.begin(), 0, 0, 0)) {
+            // We only require this to succeed if the format is renderable.
+            REPORTER_ASSERT(reporter, !context->colorTypeSupportedAsSurface(colorType));
+            return;
+        }
+
+        if (kARGB_4444_SkColorType == colorType) {
             check_4444(reporter, controlPixelData, readBuffer);
         } else {
-            SkASSERT(kRGB_565_GrPixelConfig == config);
+            SkASSERT(kRGB_565_SkColorType == colorType);
             check_565(reporter, controlPixelData, readBuffer);
         }
     }
@@ -132,13 +139,11 @@ void runTest(skiatest::Reporter* reporter, GrContext* context,
 static const int CONTROL_ARRAY_SIZE = DEV_W * DEV_H;
 
 DEF_GPUTEST_FOR_RENDERING_CONTEXTS(RGBA4444TextureTest, reporter, ctxInfo) {
-    runTest<uint16_t>(reporter, ctxInfo.grContext(), 0xFF00, 0xFA62,
-                      CONTROL_ARRAY_SIZE, kRGBA_4444_GrPixelConfig);
+    run_test(reporter, ctxInfo.grContext(), CONTROL_ARRAY_SIZE, kARGB_4444_SkColorType);
 }
 
 DEF_GPUTEST_FOR_RENDERING_CONTEXTS(RGB565TextureTest, reporter, ctxInfo) {
-    runTest<uint16_t>(reporter, ctxInfo.grContext(), 0xFF00, 0xFA62,
-                      CONTROL_ARRAY_SIZE, kRGB_565_GrPixelConfig);
+    run_test(reporter, ctxInfo.grContext(), CONTROL_ARRAY_SIZE, kRGB_565_SkColorType);
 }
 
 #endif

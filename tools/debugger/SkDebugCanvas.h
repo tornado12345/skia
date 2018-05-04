@@ -13,25 +13,20 @@
 #include "SkDrawCommand.h"
 #include "SkPath.h"
 #include "SkPathOps.h"
-#include "SkPicture.h"
 #include "SkString.h"
 #include "SkTArray.h"
+#include "SkVertices.h"
 #include "UrlDataManager.h"
 
 class GrAuditTrail;
 class SkNWayCanvas;
+class SkPicture;
 
 class SkDebugCanvas : public SkCanvas {
 public:
     SkDebugCanvas(int width, int height);
 
-    virtual ~SkDebugCanvas();
-
-    void toggleFilter(bool toggle) { fFilter = toggle; }
-
-    void setMegaVizMode(bool megaVizMode) { fMegaVizMode = megaVizMode; }
-
-    bool getMegaVizMode() const { return fMegaVizMode; }
+    ~SkDebugCanvas() override;
 
     /**
      * Enable or disable overdraw visualization
@@ -45,22 +40,9 @@ public:
      */
     void setClipVizColor(SkColor clipVizColor) { this->fClipVizColor = clipVizColor; }
 
-    SkColor getClipVizColor() const { return fClipVizColor; }
+    void setDrawGpuOpBounds(bool drawGpuOpBounds) { fDrawGpuOpBounds = drawGpuOpBounds; }
 
-    void setDrawGpuBatchBounds(bool drawGpuBatchBounds) {
-        fDrawGpuBatchBounds = drawGpuBatchBounds;
-    }
-
-    bool getDrawGpuBatchBounds() const { return fDrawGpuBatchBounds; }
-
-    bool getAllowSimplifyClip() const { return fAllowSimplifyClip; }
-
-    void setPicture(SkPicture *picture) { fPicture = picture; }
-
-    /**
-     * Enable or disable texure filtering override
-     */
-    void overrideTexFiltering(bool overrideTexFiltering, SkFilterQuality);
+    bool getDrawGpuOpBounds() const { return fDrawGpuOpBounds; }
 
     /**
         Executes all draw calls to the canvas.
@@ -72,7 +54,7 @@ public:
         Executes the draw calls up to the specified index.
         @param canvas  The canvas being drawn to
         @param index  The index of the final command being executed
-        @param m an optional Mth gpu batch to highlight, or -1
+        @param m an optional Mth gpu op to highlight, or -1
      */
     void drawTo(SkCanvas *canvas, int index, int m = -1);
 
@@ -91,11 +73,6 @@ public:
     }
 
     /**
-        Returns the index of the last draw command to write to the pixel at (x,y)
-     */
-    int getCommandAtPoint(int x, int y, int index);
-
-    /**
         Removes the command at the specified index
         @param index  The index of the command to delete
      */
@@ -106,37 +83,6 @@ public:
         @param index  The index of the command
      */
     SkDrawCommand *getDrawCommandAt(int index);
-
-    /**
-        Sets the draw command for a given index.
-        @param index  The index to overwrite
-        @param command The new command
-     */
-    void setDrawCommandAt(int index, SkDrawCommand *command);
-
-    /**
-        Returns information about the command at the given index.
-        @param index  The index of the command
-     */
-    const SkTDArray<SkString *> *getCommandInfo(int index) const;
-
-    /**
-        Returns the visibility of the command at the given index.
-        @param index  The index of the command
-     */
-    bool getDrawCommandVisibilityAt(int index);
-
-    /**
-        Returns the vector of draw commands
-     */
-    SK_ATTR_DEPRECATED("please use getDrawCommandAt and getSize instead")
-    const SkTDArray<SkDrawCommand *> &getDrawCommands() const;
-
-    /**
-        Returns the vector of draw commands. Do not use this entry
-        point - it is going away!
-     */
-    SkTDArray<SkDrawCommand *> &getDrawCommands();
 
     /**
         Returns length of draw command vector.
@@ -151,12 +97,6 @@ public:
      */
     void toggleCommand(int index, bool toggle);
 
-    void setUserMatrix(SkMatrix matrix) {
-        fUserMatrix = matrix;
-    }
-
-    SkString clipStackData() const { return fClipStackData; }
-
     /**
         Returns a JSON object representing up to the Nth draw, where N is less than
         SkDebugCanvas::getSize(). The encoder may use the UrlDataManager to store binary data such
@@ -164,33 +104,10 @@ public:
      */
     Json::Value toJSON(UrlDataManager &urlDataManager, int n, SkCanvas *);
 
-    Json::Value toJSONBatchList(int n, SkCanvas *);
+    Json::Value toJSONOpList(int n, SkCanvas*);
 
-////////////////////////////////////////////////////////////////////////////////
-// Inherited from SkCanvas
-////////////////////////////////////////////////////////////////////////////////
-
-    static const int kVizImageHeight = 256;
-    static const int kVizImageWidth = 256;
-
-    bool isClipEmpty() const override { return false; }
-
-    bool isClipRect() const override { return true; }
-
-    bool getClipBounds(SkRect *bounds) const override {
-        if (bounds) {
-            bounds->setXYWH(0, 0,
-                            SkIntToScalar(this->imageInfo().width()),
-                            SkIntToScalar(this->imageInfo().height()));
-        }
-        return true;
-    }
-
-    bool getClipDeviceBounds(SkIRect *bounds) const override {
-        if (bounds) {
-            bounds->setLargest();
-        }
-        return true;
+    void detachCommands(SkTDArray<SkDrawCommand*>* dst) {
+        fCommandVector.swap(*dst);
     }
 
 protected:
@@ -203,12 +120,6 @@ protected:
     void didConcat(const SkMatrix &) override;
 
     void didSetMatrix(const SkMatrix &) override;
-
-#ifdef SK_EXPERIMENTAL_SHADOWING
-    void didTranslateZ(SkScalar) override;
-#else
-    void didTranslateZ(SkScalar);
-#endif
 
     void onDrawAnnotation(const SkRect&, const char[], SkData*) override;
     void onDrawDRRect(const SkRRect&, const SkRRect&, const SkPaint&) override;
@@ -234,91 +145,47 @@ protected:
     void onDrawArc(const SkRect&, SkScalar, SkScalar, bool, const SkPaint&) override;
     void onDrawRRect(const SkRRect&, const SkPaint&) override;
     void onDrawPoints(PointMode, size_t count, const SkPoint pts[], const SkPaint&) override;
-    void onDrawVertices(VertexMode vmode, int vertexCount,
-                        const SkPoint vertices[], const SkPoint texs[],
-                        const SkColor colors[], SkBlendMode,
-                        const uint16_t indices[], int indexCount,
-                        const SkPaint&) override;
+    void onDrawVerticesObject(const SkVertices*, SkBlendMode, const SkPaint&) override;
     void onDrawPath(const SkPath&, const SkPaint&) override;
+    void onDrawRegion(const SkRegion&, const SkPaint&) override;
     void onDrawBitmap(const SkBitmap&, SkScalar left, SkScalar top, const SkPaint*) override;
     void onDrawBitmapRect(const SkBitmap&, const SkRect* src, const SkRect& dst, const SkPaint*,
                           SrcRectConstraint) override;
     void onDrawImage(const SkImage*, SkScalar left, SkScalar top, const SkPaint*) override;
+    void onDrawImageLattice(const SkImage* image, const Lattice& lattice,
+                            const SkRect& dst, const SkPaint* paint) override;
     void onDrawImageRect(const SkImage*, const SkRect* src, const SkRect& dst,
                          const SkPaint*, SrcRectConstraint) override;
     void onDrawBitmapNine(const SkBitmap&, const SkIRect& center, const SkRect& dst,
                           const SkPaint*) override;
-    void onClipRect(const SkRect&, ClipOp, ClipEdgeStyle) override;
-    void onClipRRect(const SkRRect&, ClipOp, ClipEdgeStyle) override;
-    void onClipPath(const SkPath&, ClipOp, ClipEdgeStyle) override;
-    void onClipRegion(const SkRegion& region, ClipOp) override;
+    void onDrawImageNine(const SkImage*, const SkIRect& center, const SkRect& dst,
+                         const SkPaint*) override;
+    void onClipRect(const SkRect&, SkClipOp, ClipEdgeStyle) override;
+    void onClipRRect(const SkRRect&, SkClipOp, ClipEdgeStyle) override;
+    void onClipPath(const SkPath&, SkClipOp, ClipEdgeStyle) override;
+    void onClipRegion(const SkRegion& region, SkClipOp) override;
+    void onDrawShadowRec(const SkPath&, const SkDrawShadowRec&) override;
 
     void onDrawPicture(const SkPicture*, const SkMatrix*, const SkPaint*) override;
 
-#ifdef SK_EXPERIMENTAL_SHADOWING
-    void onDrawShadowedPicture(const SkPicture*,
-                               const SkMatrix*,
-                               const SkPaint*,
-                               const SkShadowParams& params) override;
-#else
-    void onDrawShadowedPicture(const SkPicture*,
-                               const SkMatrix*,
-                               const SkPaint*,
-                               const SkShadowParams& params);
-#endif
-
-    void markActiveCommands(int index);
-
 private:
     SkTDArray<SkDrawCommand*> fCommandVector;
-    SkPicture* fPicture;
-    bool fFilter;
-    bool fMegaVizMode;
-    SkMatrix fUserMatrix;
     SkMatrix fMatrix;
     SkIRect fClip;
 
-    SkString fClipStackData;
-    bool fCalledAddStackData;
-    SkPath fSaveDevPath;
-
     bool fOverdrawViz;
-    bool fOverrideFilterQuality;
-    SkFilterQuality fFilterQuality;
     SkColor fClipVizColor;
-    bool fDrawGpuBatchBounds;
+    bool fDrawGpuOpBounds;
 
     /**
-        The active saveLayer commands at a given point in the renderering.
-        Only used when "mega" visualization is enabled.
-    */
-    SkTDArray<SkDrawCommand*> fActiveLayers;
-
-    /**
-        Adds the command to the classes vector of commands.
+        Adds the command to the class' vector of commands.
         @param command  The draw command for execution
      */
     void addDrawCommand(SkDrawCommand* command);
 
-    /**
-        Applies any panning and zooming the user has specified before
-        drawing anything else into the canvas.
-     */
-    void applyUserTransform(SkCanvas* canvas);
-
-    void resetClipStackData() { fClipStackData.reset(); fCalledAddStackData = false; }
-
-    void addClipStackData(const SkPath& devPath, const SkPath& operand, ClipOp elementOp);
-    void addPathData(const SkPath& path, const char* pathName);
-    bool lastClipStackData(const SkPath& devPath);
-    void outputConicPoints(const SkPoint* pts, SkScalar weight);
-    void outputPoints(const SkPoint* pts, int count);
-    void outputPointsCommon(const SkPoint* pts, int count);
-    void outputScalar(SkScalar num);
-
     GrAuditTrail* getAuditTrail(SkCanvas*);
 
-    void drawAndCollectBatches(int n, SkCanvas*);
+    void drawAndCollectOps(int n, SkCanvas*);
     void cleanupAuditTrail(SkCanvas*);
 
     typedef SkCanvas INHERITED;

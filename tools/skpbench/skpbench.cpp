@@ -7,8 +7,13 @@
 
 #include "GpuTimer.h"
 #include "GrContextFactory.h"
+#include "SkGr.h"
+
 #include "SkCanvas.h"
+#include "SkCommonFlags.h"
+#include "SkCommonFlagsGpu.h"
 #include "SkOSFile.h"
+#include "SkOSPath.h"
 #include "SkPerlinNoiseShader.h"
 #include "SkPicture.h"
 #include "SkPictureRecorder.h"
@@ -269,10 +274,17 @@ int main(int argc, char** argv) {
                         SkScalarCeilToInt(skp->cullRect().height()), width, height);
     }
 
+    if (config->getSurfType() != SkCommandLineConfigGpu::SurfType::kDefault) {
+        exitf(ExitErr::kUnavailable, "This tool only supports the default surface type. (%s)",
+              config->getTag().c_str());
+    }
+
     // Create a context.
-    sk_gpu_test::GrContextFactory factory;
+    GrContextOptions ctxOptions;
+    SetCtxOptionsFromCommonFlags(&ctxOptions);
+    sk_gpu_test::GrContextFactory factory(ctxOptions);
     sk_gpu_test::ContextInfo ctxInfo =
-        factory.getContextInfo(config->getContextType(), config->getContextOptions());
+        factory.getContextInfo(config->getContextType(), config->getContextOverrides());
     GrContext* ctx = ctxInfo.grContext();
     if (!ctx) {
         exitf(ExitErr::kUnavailable, "failed to create context for config %s",
@@ -282,9 +294,18 @@ int main(int argc, char** argv) {
         exitf(ExitErr::kUnavailable, "render target size %ix%i not supported by platform (max: %i)",
                                      width, height, ctx->caps()->maxRenderTargetSize());
     }
-    if (ctx->caps()->maxSampleCount() < config->getSamples()) {
-        exitf(ExitErr::kUnavailable, "sample count %i not supported by platform (max: %i)",
-                                     config->getSamples(), ctx->caps()->maxSampleCount());
+    GrPixelConfig grPixConfig = SkImageInfo2GrPixelConfig(config->getColorType(),
+                                                          config->getColorSpace(),
+                                                          *ctx->caps());
+    if (kUnknown_GrPixelConfig == grPixConfig) {
+        exitf(ExitErr::kUnavailable, "failed to get GrPixelConfig from SkColorType: %d",
+                                     config->getColorType());
+    }
+    int supportedSampleCount =
+            ctx->caps()->getRenderTargetSampleCount(config->getSamples(), grPixConfig);
+    if (supportedSampleCount != config->getSamples()) {
+        exitf(ExitErr::kUnavailable, "sample count %i not supported by platform",
+                                     config->getSamples());
     }
     sk_gpu_test::TestContext* testCtx = ctxInfo.testContext();
     if (!testCtx) {
@@ -295,8 +316,9 @@ int main(int argc, char** argv) {
     }
 
     // Create a render target.
-    SkImageInfo info = SkImageInfo::Make(width, height, config->getColorType(),
-                                         kPremul_SkAlphaType, sk_ref_sp(config->getColorSpace()));
+    SkImageInfo info =
+            SkImageInfo::Make(width, height, config->getColorType(), config->getAlphaType(),
+                              sk_ref_sp(config->getColorSpace()));
     uint32_t flags = config->getUseDIText() ? SkSurfaceProps::kUseDeviceIndependentFonts_Flag : 0;
     SkSurfaceProps props(flags, SkSurfaceProps::kLegacyFontHost_InitType);
     sk_sp<SkSurface> surface =
@@ -330,8 +352,8 @@ int main(int argc, char** argv) {
     // Save a proof (if one was requested).
     if (!FLAGS_png.isEmpty()) {
         SkBitmap bmp;
-        bmp.setInfo(info);
-        if (!surface->getCanvas()->readPixels(&bmp, 0, 0)) {
+        bmp.allocPixels(info);
+        if (!surface->getCanvas()->readPixels(bmp, 0, 0)) {
             exitf(ExitErr::kUnavailable, "failed to read canvas pixels for png");
         }
         const SkString &dirname = SkOSPath::Dirname(FLAGS_png[0]),

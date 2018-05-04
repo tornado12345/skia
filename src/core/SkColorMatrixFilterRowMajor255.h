@@ -10,7 +10,7 @@
 
 #include "SkColorFilter.h"
 
-class SK_API SkColorMatrixFilterRowMajor255 : public SkColorFilter {
+class SkColorMatrixFilterRowMajor255 : public SkColorFilter {
 public:
     SkColorMatrixFilterRowMajor255() {}
     explicit SkColorMatrixFilterRowMajor255(const SkScalar array[20]);
@@ -18,17 +18,16 @@ public:
     /** Creates a color matrix filter that returns the same value in all four channels. */
     static sk_sp<SkColorFilter> MakeSingleChannelOutput(const SkScalar row[5]);
 
-    void filterSpan(const SkPMColor src[], int count, SkPMColor[]) const override;
-    void filterSpan4f(const SkPM4f src[], int count, SkPM4f[]) const override;
     uint32_t getFlags() const override;
     bool asColorMatrix(SkScalar matrix[20]) const override;
-    sk_sp<SkColorFilter> makeComposed(sk_sp<SkColorFilter>) const override;
+    sk_sp<SkColorFilter> onMakeComposed(sk_sp<SkColorFilter>) const override;
 
 #if SK_SUPPORT_GPU
-    sk_sp<GrFragmentProcessor> asFragmentProcessor(GrContext*, SkColorSpace*) const override;
+    std::unique_ptr<GrFragmentProcessor> asFragmentProcessor(
+            GrContext*, const GrColorSpaceInfo&) const override;
 #endif
 
-    SK_TO_STRING_OVERRIDE()
+    void toString(SkString* str) const override;
 
     SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkColorMatrixFilter)
 
@@ -36,7 +35,8 @@ protected:
     void flatten(SkWriteBuffer&) const override;
 
 private:
-    bool onAppendStages(SkRasterPipeline*, bool shaderIsOpaque) const override;
+    void onAppendStages(SkRasterPipeline*, SkColorSpace*, SkArenaAlloc*,
+                        bool shaderIsOpaque) const override;
 
     SkScalar        fMatrix[20];
     float           fTranspose[20]; // for Sk4s

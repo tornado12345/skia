@@ -7,10 +7,10 @@
 
 #include "gm.h"
 #include "SkBlurMask.h"
-#include "SkBlurMaskFilter.h"
 #include "SkCanvas.h"
 #include "SkColorFilter.h"
 #include "SkLayerDrawLooper.h"
+#include "SkMaskFilter.h"
 
 // This GM tests 3 different ways of drawing four shadows around a square:
 //      just using 4 blurred rects
@@ -91,8 +91,8 @@ private:
         outerClip.offset(x, y);
 
         canvas->save();
-        canvas->clipRect(outerClip, SkCanvas::kIntersect_Op);
-        canvas->clipRect(innerClip, SkCanvas::kDifference_Op);
+        canvas->clipRect(outerClip, kIntersect_SkClipOp);
+        canvas->clipRect(innerClip, kDifference_SkClipOp);
 
         SkPaint paint;
         paint.setAntiAlias(true);
@@ -113,8 +113,7 @@ private:
     static sk_sp<SkMaskFilter> MakeBlur() {
         const SkScalar kBlurSigma = SkBlurMask::ConvertRadiusToSigma(SkIntToScalar(25));
 
-        return SkBlurMaskFilter::Make(kNormal_SkBlurStyle, kBlurSigma,
-                                      SkBlurMaskFilter::kHighQuality_BlurFlag);
+        return SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, kBlurSigma);
     }
 
     // This draws 4 blurred shadows around a single square (centered at x, y).
@@ -146,8 +145,8 @@ private:
             rect.offset(x, y);
 
             canvas->save();
-                canvas->clipRect(outerClip, SkCanvas::kIntersect_Op);
-                canvas->clipRect(rect, SkCanvas::kDifference_Op);
+                canvas->clipRect(outerClip, kIntersect_SkClipOp);
+                canvas->clipRect(rect, kDifference_SkClipOp);
 
                 // move the rect to where we want the blur to appear
                 rect.offset(gBlurOffsets[i]);
@@ -195,8 +194,8 @@ private:
         paint.setLooper(create4Looper(-kOffsetToOutsideClip-kHalfSquareSize, 0));
 
         canvas->save();
-            canvas->clipRect(outerClip, SkCanvas::kIntersect_Op);
-            canvas->clipRect(rect, SkCanvas::kDifference_Op);
+            canvas->clipRect(outerClip, kIntersect_SkClipOp);
+            canvas->clipRect(rect, kDifference_SkClipOp);
 
             rect.offset(SkIntToScalar(kOffsetToOutsideClip+kHalfSquareSize), 0);
             canvas->drawRect(rect, paint);

@@ -8,16 +8,17 @@
 // This test only works with the GPU backend.
 
 #include "gm.h"
+#include "sk_tool_utils.h"
 
 #if SK_SUPPORT_GPU
 
 #include "GrContext.h"
 #include "GrRenderTargetContextPriv.h"
-#include "SkGrPriv.h"
+#include "SkGr.h"
 #include "SkGradientShader.h"
-#include "batches/GrDrawBatch.h"
-#include "batches/GrRectBatchFactory.h"
 #include "effects/GrConstColorProcessor.h"
+#include "ops/GrDrawOp.h"
+#include "ops/GrRectOpFactory.h"
 
 namespace skiagm {
 /**
@@ -100,19 +101,17 @@ protected:
                     } else {
                         skPaint.setColor(kPaintColors[paintType]);
                     }
-                    SkAssertResult(SkPaintToGrPaint(context, renderTargetContext, skPaint,
-                                                    viewMatrix, &grPaint));
+                    SkAssertResult(SkPaintToGrPaint(context, renderTargetContext->colorSpaceInfo(),
+                                                    skPaint, viewMatrix, &grPaint));
 
                     GrConstColorProcessor::InputMode mode = (GrConstColorProcessor::InputMode) m;
                     GrColor4f color = GrColor4f::FromGrColor(kColors[procColor]);
-                    sk_sp<GrFragmentProcessor> fp(GrConstColorProcessor::Make(color, mode));
+                    auto fp = GrConstColorProcessor::Make(color, mode);
 
                     grPaint.addColorFragmentProcessor(std::move(fp));
-
-                    SkAutoTUnref<GrDrawBatch> batch(
-                            GrRectBatchFactory::CreateNonAAFill(grPaint.getColor(), viewMatrix,
-                                                                renderRect, nullptr, nullptr));
-                    renderTargetContext->priv().testingOnly_drawBatch(grPaint, batch);
+                    renderTargetContext->priv().testingOnly_addDrawOp(
+                            GrRectOpFactory::MakeNonAAFill(std::move(grPaint), viewMatrix,
+                                                           renderRect, GrAAType::kNone));
 
                     // Draw labels for the input to the processor and the processor to the right of
                     // the test rect. The input label appears above the processor label.
@@ -134,7 +133,7 @@ protected:
                     // get the bounds of the text in order to position it
                     labelPaint.measureText(inputLabel.c_str(), inputLabel.size(),
                                            &inputLabelBounds);
-                    canvas->drawText(inputLabel.c_str(), inputLabel.size(),
+                    canvas->drawString(inputLabel,
                                      renderRect.fRight + kPad,
                                      -inputLabelBounds.fTop, labelPaint);
                     // update the bounds to reflect the offset we used to draw it.
@@ -143,7 +142,7 @@ protected:
                     SkRect procLabelBounds;
                     labelPaint.measureText(procLabel.c_str(), procLabel.size(),
                                            &procLabelBounds);
-                    canvas->drawText(procLabel.c_str(), procLabel.size(),
+                    canvas->drawString(procLabel,
                                      renderRect.fRight + kPad,
                                      inputLabelBounds.fBottom + 2.f - procLabelBounds.fTop,
                                      labelPaint);

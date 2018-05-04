@@ -6,6 +6,8 @@
  */
 
 #include "gm.h"
+#include "sk_tool_utils.h"
+#include "SkBlendModePriv.h"
 #include "SkCanvas.h"
 #include "SkGradientShader.h"
 #include "SkLumaColorFilter.h"
@@ -121,7 +123,7 @@ protected:
 
         SkScalar gridStep = kSize + 2 * kInset;
         for (size_t i = 0; i < SK_ARRAY_COUNT(modes); ++i) {
-            draw_label(canvas, SkXfermode::ModeName(modes[i]),
+            draw_label(canvas, SkBlendMode_Name(modes[i]),
                        SkPoint::Make(gridStep * (0.5f + i), 20));
         }
 

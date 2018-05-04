@@ -30,7 +30,7 @@ struct Config {
     int samples;
 #if SK_SUPPORT_GPU
     sk_gpu_test::GrContextFactory::ContextType ctxType;
-    sk_gpu_test::GrContextFactory::ContextOptions ctxOptions;
+    sk_gpu_test::GrContextFactory::ContextOverrides ctxOverrides;
     bool useDFText;
 #else
     int bogusInt;
@@ -78,6 +78,9 @@ struct Target {
 
     /** Writes any config-specific data to the log. */
     virtual void fillOptions(ResultsWriter*) { }
+
+    /** Writes gathered stats using SkDebugf. */
+    virtual void dumpStats() {}
 
     SkCanvas* getCanvas() const {
         if (!surface.get()) {

@@ -14,7 +14,6 @@
 #include "SkRegion.h"
 #include "SkShader.h"
 #include "SkUtils.h"
-#include "SkXfermode.h"
 #include "SkColorPriv.h"
 #include "SkColorFilter.h"
 #include "SkParsePath.h"
@@ -133,12 +132,6 @@ protected:
             canvas->drawPath(path, paint);
             canvas->restore();
         }
-    }
-
-    virtual SkView::Click* onFindClickHandler(SkScalar x, SkScalar y,
-                                              unsigned modi) {
-        this->inval(nullptr);
-        return this->INHERITED::onFindClickHandler(x, y, modi);
     }
 
 private:

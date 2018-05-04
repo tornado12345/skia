@@ -5,10 +5,15 @@
  * found in the LICENSE file.
  */
 
+#include "SkTypes.h"
+
+#ifdef SK_XML
+
 #include "SampleCode.h"
 #include "SkCanvas.h"
 #include "SkDOM.h"
 #include "SkOSFile.h"
+#include "SkOSPath.h"
 #include "SkStream.h"
 #include "SkSVGDOM.h"
 #include "SkView.h"
@@ -19,7 +24,7 @@ class SVGFileView : public SampleView {
 public:
     SVGFileView(const SkString& path)
         : fPath(path), fLabel(SkStringPrintf("[%s]", SkOSPath::Basename(path.c_str()).c_str())) {}
-    virtual ~SVGFileView() = default;
+    ~SVGFileView() override = default;
 
 protected:
     void onOnceBeforeDraw() override {
@@ -77,3 +82,4 @@ SampleView* CreateSampleSVGFileView(const SkString& filename);
 SampleView* CreateSampleSVGFileView(const SkString& filename) {
     return new SVGFileView(filename);
 }
+#endif  // SK_XML

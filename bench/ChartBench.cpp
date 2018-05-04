@@ -106,8 +106,8 @@ protected:
 
     void onDraw(int loops, SkCanvas* canvas) override {
         bool sizeChanged = false;
-        if (canvas->getDeviceSize() != fSize) {
-            fSize = canvas->getDeviceSize();
+        if (canvas->getBaseLayerSize() != fSize) {
+            fSize = canvas->getBaseLayerSize();
             sizeChanged = true;
         }
 
@@ -132,9 +132,6 @@ protected:
         }
 
         for (int frame = 0; frame < loops; ++frame) {
-
-            canvas->clear(0xFFE0F0E0);
-
             SkPath plotPath;
             SkPath fillPath;
 

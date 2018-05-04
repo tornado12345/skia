@@ -6,13 +6,15 @@
  */
 
 #include "SkData.h"
+#include "SkCanvas.h"
 #include "SkGraphics.h"
 #include "SkImageGenerator.h"
+#include "SkImageInfoPriv.h"
 #include "Test.h"
 
 static bool gMyFactoryWasCalled;
 
-static SkImageGenerator* my_factory(SkData*) {
+static std::unique_ptr<SkImageGenerator> my_factory(sk_sp<SkData>) {
     gMyFactoryWasCalled = true;
     return nullptr;
 }
@@ -23,20 +25,18 @@ static void test_imagegenerator_factory(skiatest::Reporter* reporter) {
 
     gMyFactoryWasCalled = false;
 
-    SkImageGenerator* gen;
     REPORTER_ASSERT(reporter, !gMyFactoryWasCalled);
 
-    gen = SkImageGenerator::NewFromEncoded(data.get());
+    std::unique_ptr<SkImageGenerator> gen = SkImageGenerator::MakeFromEncoded(data);
     REPORTER_ASSERT(reporter, nullptr == gen);
     REPORTER_ASSERT(reporter, !gMyFactoryWasCalled);
 
     // Test is racy, in that it hopes no other thread is changing this global...
-    SkGraphics::ImageGeneratorFromEncodedFactory prev =
-                                    SkGraphics::SetImageGeneratorFromEncodedFactory(my_factory);
-    gen = SkImageGenerator::NewFromEncoded(data.get());
+    auto prev = SkGraphics::SetImageGeneratorFromEncodedDataFactory(my_factory);
+    gen = SkImageGenerator::MakeFromEncoded(data);
     REPORTER_ASSERT(reporter, nullptr == gen);
     REPORTER_ASSERT(reporter, gMyFactoryWasCalled);
-    SkGraphics::SetImageGeneratorFromEncodedFactory(prev);
+    SkGraphics::SetImageGeneratorFromEncodedDataFactory(prev);
 }
 
 class MyImageGenerator : public SkImageGenerator {
@@ -71,3 +71,45 @@ DEF_TEST(ImageGenerator, reporter) {
         test_imagegenerator_factory(reporter);
     }
 }
+
+#include "SkAutoMalloc.h"
+#include "SkPictureRecorder.h"
+
+static sk_sp<SkPicture> make_picture() {
+    SkPictureRecorder recorder;
+    recorder.beginRecording(100, 100)->drawColor(SK_ColorRED);
+    return recorder.finishRecordingAsPicture();
+}
+
+DEF_TEST(PictureImageGenerator, reporter) {
+    const struct {
+        SkColorType fColorType;
+        SkAlphaType fAlphaType;
+        bool        fExpectSuccess;
+    } recs[] = {
+        { kRGBA_8888_SkColorType, kPremul_SkAlphaType, kRGBA_8888_SkColorType == kN32_SkColorType },
+        { kBGRA_8888_SkColorType, kPremul_SkAlphaType, kBGRA_8888_SkColorType == kN32_SkColorType },
+        { kRGBA_F16_SkColorType,  kPremul_SkAlphaType, true },
+        { kRGBA_1010102_SkColorType, kPremul_SkAlphaType, true },
+
+        { kRGBA_8888_SkColorType, kUnpremul_SkAlphaType, false },
+        { kBGRA_8888_SkColorType, kUnpremul_SkAlphaType, false },
+        { kRGBA_F16_SkColorType,  kUnpremul_SkAlphaType, false },
+        { kRGBA_1010102_SkColorType, kUnpremul_SkAlphaType, false },
+    };
+
+    auto colorspace = SkColorSpace::MakeSRGB();
+    auto picture = make_picture();
+    auto gen = SkImageGenerator::MakeFromPicture({100, 100}, picture, nullptr, nullptr,
+                                                 SkImage::BitDepth::kU8, colorspace);
+
+    // worst case for all requests
+    SkAutoMalloc storage(100 * 100 * SkColorTypeBytesPerPixel(kRGBA_F16_SkColorType));
+
+    for (const auto& rec : recs) {
+        SkImageInfo info = SkImageInfo::Make(100, 100, rec.fColorType, rec.fAlphaType, colorspace);
+        bool success = gen->getPixels(info, storage.get(), info.minRowBytes());
+        REPORTER_ASSERT(reporter, success == rec.fExpectSuccess);
+    }
+}
+

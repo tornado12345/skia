@@ -16,7 +16,7 @@ namespace sk_gpu_test {
  * Creates a GrGLInterface for the current ANGLE GLES Context. Here current means bound in ANGLE's
  * implementation of EGL.
  */
-const GrGLInterface* CreateANGLEGLInterface();
+sk_sp<const GrGLInterface> CreateANGLEGLInterface();
 
 enum class ANGLEBackend {
     kD3D9,
@@ -30,7 +30,9 @@ enum class ANGLEContextVersion {
 };
 
 /** Creates a GLTestContext backed by ANGLE. */
-std::unique_ptr<GLTestContext> MakeANGLETestContext(ANGLEBackend, ANGLEContextVersion);
+std::unique_ptr<GLTestContext> MakeANGLETestContext(ANGLEBackend, ANGLEContextVersion,
+                                                    GLTestContext* shareContext = nullptr,
+                                                    void* display = nullptr);
 
 }  // namespace sk_gpu_test
 #endif

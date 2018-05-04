@@ -32,18 +32,12 @@ The Skia Directory
     -   [Mon](https://mon.skia.org/) Grafana dashboard (requires login).
     -   [Alerts](https://alerts.skia.org/) Monitor testing and bot status.
     -   [BugChomper] (https://bugchomper.skia.org/) Prioritize bugs quickly.
-    -   [Code Review](https://codereview.chromium.org/)
+    -   [Code Review](https://skia-review.googlesource.com/)
 
 *   Mailing Lists
     -   [Discussion Mailing List](https://groups.google.com/group/skia-discuss)
-    -   [Commit Announce
-        List](https://groups.google.com/forum/#!forum/skia-commit)
     -   [Code Review Announce
         List](https://groups.google.com/a/skia.org/forum/#!forum/reviews)
     -   [Bug Announce
         List](https://groups.google.com/a/skia.org/forum/#!forum/bugs)
-
-<!-- TODO: Remove these links once all information is scraped off them. -->
-*   Deprecated
-    -   [Old deprecated documentation](https://sites.google.com/site/skiadocs/)
 

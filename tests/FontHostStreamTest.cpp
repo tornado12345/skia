@@ -11,6 +11,7 @@
 #include "SkFontDescriptor.h"
 #include "SkGraphics.h"
 #include "SkPaint.h"
+#include "SkPaintPriv.h"
 #include "SkPoint.h"
 #include "SkRect.h"
 #include "SkStream.h"
@@ -38,9 +39,6 @@ static bool compare(const SkBitmap& ref, const SkIRect& iref,
 {
     const int xOff = itest.fLeft - iref.fLeft;
     const int yOff = itest.fTop - iref.fTop;
-
-    SkAutoLockPixels alpRef(ref);
-    SkAutoLockPixels alpTest(test);
 
     for (int y = 0; y < test.height(); ++y) {
         for (int x = 0; x < test.width(); ++x) {
@@ -85,12 +83,17 @@ DEF_TEST(FontHostStream, reporter) {
 
         // Test: origTypeface and streamTypeface from orig data draw the same
         drawBG(&origCanvas);
-        origCanvas.drawText("A", 1, point.fX, point.fY, paint);
+        origCanvas.drawString("A", point.fX, point.fY, paint);
 
-        sk_sp<SkTypeface> typeface(SkToBool(paint.getTypeface()) ? sk_ref_sp(paint.getTypeface())
-                                                                 : SkTypeface::MakeDefault());
+        sk_sp<SkTypeface> typeface = SkPaintPriv::RefTypefaceOrDefault(paint);
         int ttcIndex;
         std::unique_ptr<SkStreamAsset> fontData(typeface->openStream(&ttcIndex));
+        if (!fontData) {
+            // We're using a SkTypeface that can't give us a stream.
+            // This happens with portable or system fonts.  End the test now.
+            return;
+        }
+
         sk_sp<SkTypeface> streamTypeface(SkTypeface::MakeFromStream(fontData.release()));
 
         SkFontDescriptor desc;

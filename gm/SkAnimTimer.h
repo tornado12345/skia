@@ -5,6 +5,7 @@
  * found in the LICENSE file.
  */
 
+#include "SkScalar.h"
 #include "SkTime.h"
 
 #ifndef SkAnimTimer_DEFINED
@@ -30,6 +31,11 @@ public:
      *  Class begins in the "stopped" state.
      */
     SkAnimTimer() : fBaseTimeNanos(0), fCurrTimeNanos(0), fState(kStopped_State) {}
+
+    SkAnimTimer(double base, double curr, State state)
+        : fBaseTimeNanos(base)
+        , fCurrTimeNanos(curr)
+        , fState(state) {}
 
     bool isStopped() const { return kStopped_State == fState; }
     bool isRunning() const { return kRunning_State == fState; }

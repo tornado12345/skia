@@ -16,32 +16,17 @@
 #include "GrRenderTargetPriv.h"
 #include "GrStencilAttachment.h"
 #include "GrStencilSettings.h"
+#include "SkRectPriv.h"
 
-GrRenderTarget::GrRenderTarget(GrGpu* gpu, const GrSurfaceDesc& desc, Flags flags,
+GrRenderTarget::GrRenderTarget(GrGpu* gpu, const GrSurfaceDesc& desc,
                                GrStencilAttachment* stencil)
-    : INHERITED(gpu, desc)
-    , fStencilAttachment(stencil)
-    , fMultisampleSpecsID(0)
-    , fFlags(flags) {
-    SkASSERT(!(fFlags & Flags::kMixedSampled) || fDesc.fSampleCnt > 0);
-    SkASSERT(!(fFlags & Flags::kWindowRectsSupport) || gpu->caps()->maxWindowRectangles() > 0);
-    fResolveRect.setLargestInverted();
-}
-
-void GrRenderTarget::discard() {
-    // go through context so that all necessary flushing occurs
-    GrContext* context = this->getContext();
-    if (!context) {
-        return;
-    }
-
-    sk_sp<GrRenderTargetContext> renderTargetContext(
-        context->contextPriv().makeWrappedRenderTargetContext(sk_ref_sp(this), nullptr));
-    if (!renderTargetContext) {
-        return;
-    }
-
-    renderTargetContext->discard();
+        : INHERITED(gpu, desc)
+        , fSampleCnt(desc.fSampleCnt)
+        , fStencilAttachment(stencil) {
+    SkASSERT(desc.fFlags & kRenderTarget_GrSurfaceFlag);
+    SkASSERT(!this->hasMixedSamples() || fSampleCnt > 1);
+    SkASSERT(!this->supportsWindowRects() || gpu->caps()->maxWindowRectangles() > 0);
+    fResolveRect = SkRectPriv::MakeILargestInverted();
 }
 
 void GrRenderTarget::flagAsNeedingResolve(const SkIRect* rect) {
@@ -60,12 +45,16 @@ void GrRenderTarget::flagAsNeedingResolve(const SkIRect* rect) {
 void GrRenderTarget::overrideResolveRect(const SkIRect rect) {
     fResolveRect = rect;
     if (fResolveRect.isEmpty()) {
-        fResolveRect.setLargestInverted();
+        fResolveRect = SkRectPriv::MakeILargestInverted();
     } else {
         if (!fResolveRect.intersect(0, 0, this->width(), this->height())) {
-            fResolveRect.setLargestInverted();
+            fResolveRect = SkRectPriv::MakeILargestInverted();
         }
     }
+}
+
+void GrRenderTarget::flagAsResolved() {
+    fResolveRect = SkRectPriv::MakeILargestInverted();
 }
 
 void GrRenderTarget::onRelease() {
@@ -77,22 +66,18 @@ void GrRenderTarget::onRelease() {
 void GrRenderTarget::onAbandon() {
     SkSafeSetNull(fStencilAttachment);
 
-    // The contents of this renderTarget are gone/invalid. It isn't useful to point back
-    // the creating opList.
-    this->setLastOpList(nullptr);
-
     INHERITED::onAbandon();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-bool GrRenderTargetPriv::attachStencilAttachment(GrStencilAttachment* stencil) {
+bool GrRenderTargetPriv::attachStencilAttachment(sk_sp<GrStencilAttachment> stencil) {
     if (!stencil && !fRenderTarget->fStencilAttachment) {
         // No need to do any work since we currently don't have a stencil attachment and
         // we're not actually adding one.
         return true;
     }
-    fRenderTarget->fStencilAttachment = stencil;
+    fRenderTarget->fStencilAttachment = stencil.release();
     if (!fRenderTarget->completeStencilAttachment()) {
         SkSafeSetNull(fRenderTarget->fStencilAttachment);
         return false;
@@ -104,22 +89,3 @@ int GrRenderTargetPriv::numStencilBits() const {
     SkASSERT(this->getStencilAttachment());
     return this->getStencilAttachment()->bits();
 }
-
-const GrGpu::MultisampleSpecs&
-GrRenderTargetPriv::getMultisampleSpecs(const GrPipeline& pipeline) const {
-    SkASSERT(fRenderTarget == pipeline.getRenderTarget()); // TODO: remove RT from pipeline.
-    GrGpu* gpu = fRenderTarget->getGpu();
-    if (auto id = fRenderTarget->fMultisampleSpecsID) {
-        SkASSERT(gpu->queryMultisampleSpecs(pipeline).fUniqueID == id);
-        return gpu->getMultisampleSpecs(id);
-    }
-    const GrGpu::MultisampleSpecs& specs = gpu->queryMultisampleSpecs(pipeline);
-    fRenderTarget->fMultisampleSpecsID = specs.fUniqueID;
-    return specs;
-}
-
-int GrRenderTargetPriv::maxWindowRectangles() const {
-    return (this->flags() & Flags::kWindowRectsSupport) ?
-           fRenderTarget->getGpu()->caps()->maxWindowRectangles() : 0;
-}
-

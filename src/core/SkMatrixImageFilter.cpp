@@ -8,6 +8,8 @@
 #include "SkMatrixImageFilter.h"
 
 #include "SkCanvas.h"
+#include "SkColorSpaceXformer.h"
+#include "SkImageFilterPriv.h"
 #include "SkReadBuffer.h"
 #include "SkSpecialImage.h"
 #include "SkSpecialSurface.h"
@@ -34,8 +36,8 @@ sk_sp<SkFlattenable> SkMatrixImageFilter::CreateProc(SkReadBuffer& buffer) {
     SK_IMAGEFILTER_UNFLATTEN_COMMON(common, 1);
     SkMatrix matrix;
     buffer.readMatrix(&matrix);
-    SkFilterQuality quality = static_cast<SkFilterQuality>(buffer.readInt());
-    return Make(matrix, quality, common.getInput(0));
+
+    return Make(matrix, buffer.read32LE(kLast_SkFilterQuality), common.getInput(0));
 }
 
 void SkMatrixImageFilter::flatten(SkWriteBuffer& buffer) const {
@@ -95,6 +97,15 @@ sk_sp<SkSpecialImage> SkMatrixImageFilter::onFilterImage(SkSpecialImage* source,
     return surf->makeImageSnapshot();
 }
 
+sk_sp<SkImageFilter> SkMatrixImageFilter::onMakeColorSpace(SkColorSpaceXformer* xformer) const {
+    SkASSERT(1 == this->countInputs());
+    auto input = xformer->apply(this->getInput(0));
+    if (input.get() != this->getInput(0)) {
+        return SkMatrixImageFilter::Make(fTransform, fFilterQuality, std::move(input));
+    }
+    return this->refMe();
+}
+
 SkRect SkMatrixImageFilter::computeFastBounds(const SkRect& src) const {
     SkRect bounds = this->getInput(0) ? this->getInput(0)->computeFastBounds(src) : src;
     SkRect dst;
@@ -123,7 +134,6 @@ SkIRect SkMatrixImageFilter::onFilterNodeBounds(const SkIRect& src, const SkMatr
     return floatBounds.roundOut();
 }
 
-#ifndef SK_IGNORE_TO_STRING
 void SkMatrixImageFilter::toString(SkString* str) const {
     str->appendf("SkMatrixImageFilter: (");
 
@@ -145,4 +155,3 @@ void SkMatrixImageFilter::toString(SkString* str) const {
 
     str->appendf(")");
 }
-#endif

@@ -20,15 +20,20 @@ public:
     void load(SkScalar winWidth, SkScalar winHeight) override;
     void unload() override;
     bool animate(const SkAnimTimer& timer) override {
-        if (SampleView::IsSampleView(fView)) {
-            return ((SampleView*)fView)->animate(timer);
+        if (fView && SampleView::IsSampleView(fView.get())) {
+            return ((SampleView*)fView.get())->animate(timer);
         }
         return false;
     }
 
+    bool onChar(SkUnichar c) override;
+    bool onMouse(SkScalar x, SkScalar y, sk_app::Window::InputState state,
+                 uint32_t modifiers) override;
+
 private:
     const SkViewFactory*   fViewFactory;
-    SkView*                fView;
+    sk_sp<SkView>          fView;
+    SkView::Click*         fClick;
 };
 
 #endif

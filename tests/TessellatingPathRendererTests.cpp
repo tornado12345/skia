@@ -5,13 +5,18 @@
  * found in the LICENSE file.
  */
 
+#include "Test.h"
+
 #include "SkPath.h"
 
 #if SK_SUPPORT_GPU
+#include "GrClip.h"
 #include "GrContext.h"
-#include "GrTest.h"
-#include "Test.h"
-#include "batches/GrTessellatingPathRenderer.h"
+#include "GrContextPriv.h"
+#include "SkGradientShader.h"
+#include "SkShaderBase.h"
+#include "effects/GrPorterDuffXferProcessor.h"
+#include "ops/GrTessellatingPathRenderer.h"
 
 /*
  * These tests pass by not crashing, hanging or asserting in Debug.
@@ -249,60 +254,314 @@ static SkPath create_path_16() {
     return path;
 }
 
-static void test_path(GrRenderTargetContext* renderTargetContext, GrResourceProvider* rp,
-                      const SkPath& path) {
+// A simple concave path. Test this with a non-invertible matrix.
+static SkPath create_path_17() {
+    SkPath path;
+    path.moveTo(20, 20);
+    path.lineTo(80, 20);
+    path.lineTo(30, 30);
+    path.lineTo(20, 80);
+    return path;
+}
+
+// A shape with a vertex collinear to the right hand edge.
+// This messes up find_enclosing_edges.
+static SkPath create_path_18() {
+    SkPath path;
+    path.moveTo(80, 20);
+    path.lineTo(80, 60);
+    path.lineTo(20, 60);
+    path.moveTo(80, 50);
+    path.lineTo(80, 80);
+    path.lineTo(20, 80);
+    return path;
+}
+
+// Exercises the case where an edge becomes collinear with *two* of its
+// adjacent neighbour edges after splitting.
+// This is a reduction from
+// http://mooooo.ooo/chebyshev-sine-approximation/horner_ulp.svg
+static SkPath create_path_19() {
+    SkPath path;
+    path.moveTo(  351.99298095703125,         348.23046875);
+    path.lineTo(  351.91876220703125,         347.33984375);
+    path.lineTo(  351.91876220703125,          346.1953125);
+    path.lineTo(  351.90313720703125,           347.734375);
+    path.lineTo(  351.90313720703125,          346.1328125);
+    path.lineTo(  351.87579345703125,         347.93359375);
+    path.lineTo(  351.87579345703125,           345.484375);
+    path.lineTo(  351.86407470703125,          347.7890625);
+    path.lineTo(  351.86407470703125,          346.2109375);
+    path.lineTo(  351.84844970703125,   347.63763427734375);
+    path.lineTo(  351.84454345703125,   344.19232177734375);
+    path.lineTo(  351.78204345703125,    346.9483642578125);
+    path.lineTo( 351.758636474609375,      347.18310546875);
+    path.lineTo(  351.75469970703125,               346.75);
+    path.lineTo(  351.75469970703125,            345.46875);
+    path.lineTo(         352.5546875,            345.46875);
+    path.lineTo(        352.55078125,         347.01953125);
+    path.lineTo(  351.75079345703125,   347.02313232421875);
+    path.lineTo(  351.74688720703125,   346.15203857421875);
+    path.lineTo(  351.74688720703125,  347.646148681640625);
+    path.lineTo(         352.5390625,         346.94140625);
+    path.lineTo(  351.73907470703125,   346.94268798828125);
+    path.lineTo(  351.73516845703125,   344.48565673828125);
+    path.lineTo(          352.484375,         346.73828125);
+    path.lineTo(  351.68438720703125,    346.7401123046875);
+    path.lineTo(         352.4765625,           346.546875);
+    path.lineTo(  351.67657470703125,   346.54937744140625);
+    path.lineTo(        352.47265625,         346.75390625);
+    path.lineTo(  351.67266845703125,  346.756622314453125);
+    path.lineTo(  351.66876220703125,  345.612091064453125);
+    return path;
+}
+
+// An intersection above the first vertex in the mesh.
+// Reduction from http://crbug.com/730687
+static SkPath create_path_20() {
+    SkPath path;
+    path.moveTo(           2822128.5,  235.026336669921875);
+    path.lineTo(          2819349.25, 235.3623504638671875);
+    path.lineTo(          -340558688, 23.83478546142578125);
+    path.lineTo(          -340558752, 25.510419845581054688);
+    path.lineTo(          -340558720, 27.18605804443359375);
+    return path;
+}
+
+// An intersection whose result is NaN (due to rounded-to-inf endpoint).
+static SkPath create_path_21() {
+    SkPath path;
+    path.moveTo(1.7889142061167663539e+38, 39338463358011572224.0);
+    path.lineTo(  1647.4193115234375,       -522.603515625);
+    path.lineTo(    1677.74560546875,   -529.0028076171875);
+    path.lineTo(    1678.29541015625,   -528.7847900390625);
+    path.lineTo(  1637.5167236328125,  -519.79266357421875);
+    path.lineTo(  1647.4193115234375,       -522.603515625);
+    return path;
+}
+
+// A quad which becomes NaN when interpolated.
+static SkPath create_path_22() {
+    SkPath path;
+    path.moveTo(-5.71889e+13f, 1.36759e+09f);
+    path.quadTo(2.45472e+19f, -3.12406e+15f, -2.19589e+18f, 2.79462e+14f);
+    return path;
+}
+
+// A path which contains out-of-range colinear intersections.
+static SkPath create_path_23() {
+    SkPath path;
+    path.moveTo(                   0, 63.39080047607421875);
+    path.lineTo(-0.70804601907730102539, 63.14350128173828125);
+    path.lineTo(-7.8608899287380243391e-17, 64.14080047607421875);
+    path.moveTo(                   0, 64.14080047607421875);
+    path.lineTo(44.285900115966796875, 64.14080047607421875);
+    path.lineTo(                   0, 62.64080047607421875);
+    path.moveTo(21.434900283813476562, -0.24732701480388641357);
+    path.lineTo(-0.70804601907730102539, 63.14350128173828125);
+    path.lineTo(0.70804601907730102539,  63.6381988525390625);
+    return path;
+}
+
+// A path which results in infs and nans when conics are converted to quads.
+static SkPath create_path_24() {
+     SkPath path;
+     path.moveTo(-2.20883e+37f, -1.02892e+37f);
+     path.conicTo(-2.00958e+38f, -9.36107e+37f, -1.7887e+38f, -8.33215e+37f, 0.707107f);
+     path.conicTo(-1.56782e+38f, -7.30323e+37f, 2.20883e+37f, 1.02892e+37f, 0.707107f);
+     path.conicTo(2.00958e+38f, 9.36107e+37f, 1.7887e+38f, 8.33215e+37f, 0.707107f);
+     path.conicTo(1.56782e+38f, 7.30323e+37f, -2.20883e+37f, -1.02892e+37f, 0.707107f);
+     return path;
+}
+
+// An edge collapse event which also collapses a neighbour, requiring
+// its event to be removed.
+static SkPath create_path_25() {
+    SkPath path;
+    path.moveTo( 43.44110107421875,  148.15106201171875);
+    path.lineTo( 44.64471435546875,  148.16748046875);
+    path.lineTo( 46.35009765625,     147.403076171875);
+    path.lineTo( 46.45404052734375,  148.34906005859375);
+    path.lineTo( 45.0400390625,      148.54205322265625);
+    path.lineTo( 44.624053955078125, 148.9810791015625);
+    path.lineTo( 44.59405517578125,  149.16107177734375);
+    path.lineTo( 44.877044677734375, 149.62005615234375);
+    path.lineTo(144.373016357421875,  68.8070068359375);
+    return path;
+}
+
+// An edge collapse event causes an edge to become collinear, requiring
+// its event to be removed.
+static SkPath create_path_26() {
+    SkPath path;
+    path.moveTo( 43.44110107421875,  148.15106201171875);
+    path.lineTo( 44.64471435546875,  148.16748046875);
+    path.lineTo( 46.35009765625,     147.403076171875);
+    path.lineTo( 46.45404052734375,  148.34906005859375);
+    path.lineTo( 45.0400390625,      148.54205322265625);
+    path.lineTo( 44.624053955078125, 148.9810791015625);
+    path.lineTo( 44.59405517578125,  149.16107177734375);
+    path.lineTo( 44.877044677734375, 149.62005615234375);
+    path.lineTo(144.373016357421875,  68.8070068359375);
+    return path;
+}
+
+// A path which results in non-finite points when stroked and bevelled for AA.
+static SkPath create_path_27() {
+     SkPath path;
+     path.moveTo(8.5027233009104409507e+37, 1.7503381025241130639e+37);
+     path.lineTo(7.0923661737711584874e+37, 1.4600074517285415699e+37);
+     path.lineTo(7.0848733446033294691e+37, 1.4584649744781838604e+37);
+     path.lineTo(-2.0473916115129349496e+37, -4.2146796450364162012e+36);
+     path.lineTo(2.0473912312177548811e+37, 4.2146815465123165435e+36);
+     return path;
+}
+
+// AA stroking this path produces intersection failures on bevelling.
+// This should skip the point, but not assert.
+static SkPath create_path_28() {
+    SkPath path;
+    path.moveTo(-7.5952312625177475154e+21, -2.6819185100266674911e+24);
+    path.lineTo(  1260.3787841796875,   1727.7947998046875);
+    path.lineTo(  1260.5567626953125,   1728.0386962890625);
+    path.lineTo(1.1482511310557754163e+21, 4.054538502765980051e+23);
+    path.lineTo(-7.5952312625177475154e+21, -2.6819185100266674911e+24);
+    return path;
+}
+
+// A quad which generates a huge number of points (>2B) when uniformly
+// linearized. This should not hang or OOM.
+static SkPath create_path_29() {
+    SkPath path;
+    path.moveTo(10, 0);
+    path.lineTo(0, 0);
+    path.quadTo(10, 0, 0, 8315084722602508288);
+    return path;
+}
+
+// A path which hangs during simplification. It produces an edge which is
+// to the left of its own endpoints, which causes an infinte loop in the
+// right-enclosing-edge splitting.
+static SkPath create_path_30() {
+    SkPath path;
+    path.moveTo(0.75001740455627441406,     23.051967620849609375);
+    path.lineTo(5.8471612930297851562,      22.731662750244140625);
+    path.lineTo(10.749670028686523438,      22.253145217895507812);
+    path.lineTo(13.115868568420410156,      22.180681228637695312);
+    path.lineTo(15.418928146362304688,      22.340015411376953125);
+    path.lineTo(  17.654022216796875,       22.82159423828125);
+    path.lineTo(19.81632232666015625,       23.715869903564453125);
+    path.lineTo(40,                         0);
+    path.lineTo(5.5635203441547955577e-15,  0);
+    path.lineTo(5.5635203441547955577e-15,  47);
+    path.lineTo(-1.4210854715202003717e-14, 21.713298797607421875);
+    path.lineTo(0.75001740455627441406,     21.694292068481445312);
+    path.lineTo(0.75001740455627441406,     23.051967620849609375);
+    return path;
+}
+
+// A path with vertices which become infinite on AA stroking. Should not crash or assert.
+static SkPath create_path_31() {
+    SkPath path;
+    path.moveTo(2.0257809259190991347e+36,  -1244080640);
+    path.conicTo(2.0257809259190991347e+36, -1244080640,
+                 2.0257809259190991347e+36, 0.10976474732160568237, 0.70710676908493041992);
+    path.lineTo(-10036566016, -1954718402215936);
+    path.conicTo(-1.1375507718551896064e+20, -1954721086570496,
+                 10036566016, -1954721086570496, 0.70710676908493041992);
+    return path;
+}
+
+static std::unique_ptr<GrFragmentProcessor> create_linear_gradient_processor(GrContext* ctx) {
+
+    SkPoint pts[2] = { {0, 0}, {1, 1} };
+    SkColor colors[2] = { SK_ColorGREEN, SK_ColorBLUE };
+    sk_sp<SkShader> shader = SkGradientShader::MakeLinear(
+        pts, colors, nullptr, SK_ARRAY_COUNT(colors), SkShader::kClamp_TileMode);
+    GrColorSpaceInfo colorSpaceInfo(nullptr, kRGBA_8888_GrPixelConfig);
+    GrFPArgs args(ctx, &SkMatrix::I(), SkFilterQuality::kLow_SkFilterQuality, &colorSpaceInfo);
+    return as_SB(shader)->asFragmentProcessor(args);
+}
+
+static void test_path(GrContext* ctx,
+                      GrRenderTargetContext* renderTargetContext,
+                      const SkPath& path,
+                      const SkMatrix& matrix = SkMatrix::I(),
+                      GrAAType aaType = GrAAType::kNone,
+                      std::unique_ptr<GrFragmentProcessor> fp = nullptr) {
     GrTessellatingPathRenderer tess;
 
     GrPaint paint;
-    paint.setXPFactory(GrPorterDuffXPFactory::Make(SkBlendMode::kSrc));
+    paint.setXPFactory(GrPorterDuffXPFactory::Get(SkBlendMode::kSrc));
+    if (fp) {
+        paint.addColorFragmentProcessor(std::move(fp));
+    }
 
     GrNoClip noClip;
+    SkIRect clipConservativeBounds = SkIRect::MakeWH(renderTargetContext->width(),
+                                                     renderTargetContext->height());
     GrStyle style(SkStrokeRec::kFill_InitStyle);
-    GrPathRenderer::DrawPathArgs args;
-    args.fPaint = &paint;
-    args.fUserStencilSettings = &GrUserStencilSettings::kUnused;
-    args.fRenderTargetContext = renderTargetContext;
-    args.fClip = &noClip;
-    args.fResourceProvider = rp;
-    args.fViewMatrix = &SkMatrix::I();
     GrShape shape(path, style);
-    args.fShape = &shape;
-    args.fAntiAlias = false;
+    GrPathRenderer::DrawPathArgs args{ctx,
+                                      std::move(paint),
+                                      &GrUserStencilSettings::kUnused,
+                                      renderTargetContext,
+                                      &noClip,
+                                      &clipConservativeBounds,
+                                      &matrix,
+                                      &shape,
+                                      aaType,
+                                      false};
     tess.drawPath(args);
 }
 
 DEF_GPUTEST_FOR_ALL_CONTEXTS(TessellatingPathRendererTests, reporter, ctxInfo) {
-    sk_sp<GrRenderTargetContext> rtc(ctxInfo.grContext()->makeRenderTargetContext(
-                                                                         SkBackingFit::kApprox,
-                                                                         800, 800,
-                                                                         kRGBA_8888_GrPixelConfig,
-                                                                         nullptr,
-                                                                         0,
-                                                                         kTopLeft_GrSurfaceOrigin));
+    GrContext* ctx = ctxInfo.grContext();
+    sk_sp<GrRenderTargetContext> rtc(ctx->contextPriv().makeDeferredRenderTargetContext(
+            SkBackingFit::kApprox, 800, 800, kRGBA_8888_GrPixelConfig, nullptr, 1, GrMipMapped::kNo,
+            kTopLeft_GrSurfaceOrigin));
     if (!rtc) {
         return;
     }
 
-    GrTestTarget tt;
-    ctxInfo.grContext()->getTestTarget(&tt, rtc);
-    GrResourceProvider* rp = tt.resourceProvider();
+    ctx->flush();
+    // Adding discard to appease vulkan validation warning about loading uninitialized data on draw
+    rtc->discard();
 
-    test_path(rtc.get(), rp, create_path_0());
-    test_path(rtc.get(), rp, create_path_1());
-    test_path(rtc.get(), rp, create_path_2());
-    test_path(rtc.get(), rp, create_path_3());
-    test_path(rtc.get(), rp, create_path_4());
-    test_path(rtc.get(), rp, create_path_5());
-    test_path(rtc.get(), rp, create_path_6());
-    test_path(rtc.get(), rp, create_path_7());
-    test_path(rtc.get(), rp, create_path_8());
-    test_path(rtc.get(), rp, create_path_9());
-    test_path(rtc.get(), rp, create_path_10());
-    test_path(rtc.get(), rp, create_path_11());
-    test_path(rtc.get(), rp, create_path_12());
-    test_path(rtc.get(), rp, create_path_13());
-    test_path(rtc.get(), rp, create_path_14());
-    test_path(rtc.get(), rp, create_path_15());
-    test_path(rtc.get(), rp, create_path_16());
+    test_path(ctx, rtc.get(), create_path_0());
+    test_path(ctx, rtc.get(), create_path_1());
+    test_path(ctx, rtc.get(), create_path_2());
+    test_path(ctx, rtc.get(), create_path_3());
+    test_path(ctx, rtc.get(), create_path_4());
+    test_path(ctx, rtc.get(), create_path_5());
+    test_path(ctx, rtc.get(), create_path_6());
+    test_path(ctx, rtc.get(), create_path_7());
+    test_path(ctx, rtc.get(), create_path_8());
+    test_path(ctx, rtc.get(), create_path_9());
+    test_path(ctx, rtc.get(), create_path_10());
+    test_path(ctx, rtc.get(), create_path_11());
+    test_path(ctx, rtc.get(), create_path_12());
+    test_path(ctx, rtc.get(), create_path_13());
+    test_path(ctx, rtc.get(), create_path_14());
+    test_path(ctx, rtc.get(), create_path_15());
+    test_path(ctx, rtc.get(), create_path_16());
+    SkMatrix nonInvertibleMatrix = SkMatrix::MakeScale(0, 0);
+    std::unique_ptr<GrFragmentProcessor> fp(create_linear_gradient_processor(ctx));
+    test_path(ctx, rtc.get(), create_path_17(), nonInvertibleMatrix, GrAAType::kCoverage,
+              std::move(fp));
+    test_path(ctx, rtc.get(), create_path_18());
+    test_path(ctx, rtc.get(), create_path_19());
+    test_path(ctx, rtc.get(), create_path_20(), SkMatrix(), GrAAType::kCoverage);
+    test_path(ctx, rtc.get(), create_path_21(), SkMatrix(), GrAAType::kCoverage);
+    test_path(ctx, rtc.get(), create_path_22());
+    test_path(ctx, rtc.get(), create_path_23());
+    test_path(ctx, rtc.get(), create_path_24());
+    test_path(ctx, rtc.get(), create_path_25(), SkMatrix(), GrAAType::kCoverage);
+    test_path(ctx, rtc.get(), create_path_26(), SkMatrix(), GrAAType::kCoverage);
+    test_path(ctx, rtc.get(), create_path_27(), SkMatrix(), GrAAType::kCoverage);
+    test_path(ctx, rtc.get(), create_path_28(), SkMatrix(), GrAAType::kCoverage);
+    test_path(ctx, rtc.get(), create_path_29());
+    test_path(ctx, rtc.get(), create_path_30());
+    test_path(ctx, rtc.get(), create_path_31(), SkMatrix(), GrAAType::kCoverage);
 }
 #endif

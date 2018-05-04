@@ -14,12 +14,9 @@
 #include "SkShader.h"
 #include "SkSurface.h"
 
-static sk_sp<SkImage> makebm(SkCanvas* caller, int w, int h) {
+static sk_sp<SkImage> makebm(int w, int h) {
     SkImageInfo info = SkImageInfo::MakeN32Premul(w, h);
-    auto surface(caller->makeSurface(info));
-    if (nullptr == surface) {
-        surface = SkSurface::MakeRaster(info);
-    }
+    auto surface(SkSurface::MakeRaster(info));
     SkCanvas* canvas = surface->getCanvas();
 
     const SkScalar wScalar = SkIntToScalar(w);
@@ -63,8 +60,8 @@ static sk_sp<SkImage> makebm(SkCanvas* caller, int w, int h) {
 constexpr int gSize = 1024;
 constexpr int gSurfaceSize = 2048;
 
-// This GM calls drawImageRect several times using the same texture. This is
-// intended to exercise batching of these calls.
+// This GM calls drawImageRect several times using the same texture. This is intended to exercise
+// combining GrDrawOps during these calls.
 class DrawMiniBitmapRectGM : public skiagm::GM {
 public:
     DrawMiniBitmapRectGM(bool antiAlias) : fAA(antiAlias) {
@@ -81,7 +78,7 @@ protected:
 
     void onDraw(SkCanvas* canvas) override {
         if (nullptr == fImage) {
-            fImage = makebm(canvas, gSurfaceSize, gSurfaceSize);
+            fImage = makebm(gSurfaceSize, gSurfaceSize);
         }
 
         const SkRect dstRect = { 0, 0, SkIntToScalar(64), SkIntToScalar(64)};

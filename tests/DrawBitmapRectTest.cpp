@@ -19,46 +19,6 @@
 #include "SkSurface.h"
 #include "Test.h"
 
-class FailurePixelRef : public SkPixelRef {
-public:
-    FailurePixelRef(const SkImageInfo& info) : SkPixelRef(info) {}
-protected:
-    bool onNewLockPixels(LockRec*) override { return false; }
-    void onUnlockPixels() override {}
-};
-
-// crbug.com/295895
-// Crashing in skia when a pixelref fails in lockPixels
-//
-static void test_faulty_pixelref(skiatest::Reporter* reporter) {
-    // need a cache, but don't expect to use it, so the budget is not critical
-    sk_sp<SkDiscardableMemoryPool> pool(
-        SkDiscardableMemoryPool::Create(10 * 1000, nullptr));
-
-    SkBitmap bm;
-    const SkImageInfo info = SkImageInfo::MakeN32Premul(100, 100);
-    bm.setInfo(info);
-    bm.setPixelRef(new FailurePixelRef(info), 0, 0)->unref();
-    // now our bitmap has a pixelref, but we know it will fail to lock
-
-    auto surface(SkSurface::MakeRasterN32Premul(200, 200));
-    SkCanvas* canvas = surface->getCanvas();
-
-    const SkFilterQuality levels[] = {
-        kNone_SkFilterQuality,
-        kLow_SkFilterQuality,
-        kMedium_SkFilterQuality,
-        kHigh_SkFilterQuality,
-    };
-
-    SkPaint paint;
-    canvas->scale(2, 2);    // need a scale, otherwise we may ignore filtering
-    for (size_t i = 0; i < SK_ARRAY_COUNT(levels); ++i) {
-        paint.setFilterQuality(levels[i]);
-        canvas->drawBitmap(bm, 0, 0, &paint);
-    }
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 static void rand_matrix(SkMatrix* mat, SkRandom& rand, unsigned mask) {
@@ -184,9 +144,10 @@ static void test_wacky_bitmapshader(skiatest::Reporter* reporter,
 
     SkBitmap bm;
     if (bm.tryAllocN32Pixels(width, height)) {
-        // allow this to fail silently, to test the code downstream
+        bm.eraseColor(SK_ColorRED);
+    } else {
+        shouldBeDrawn = false;
     }
-    bm.eraseColor(SK_ColorRED);
 
     matrix.setAll(0.0078740157f,
                   0,
@@ -219,7 +180,7 @@ static void test_wacky_bitmapshader(skiatest::Reporter* reporter,
  *     sign-extension bleed when packing the two values (X,Y) into our 32bit
  *     slot.
  *
- *  This tests exercises the original setup, plus 3 more to ensure that we can,
+ *  This tests exercises the original setup, plus 2 more to ensure that we can,
  *  in fact, handle bitmaps at 64K-1 (assuming we don't exceed the total
  *  memory allocation limit).
  */
@@ -232,7 +193,6 @@ static void test_giantrepeat_crbug118018(skiatest::Reporter* reporter) {
         { 0x1b294, 0x7f,  false },   // crbug 118018 (width exceeds 64K)
         { 0xFFFF, 0x7f,    true },   // should draw, test max width
         { 0x7f, 0xFFFF,    true },   // should draw, test max height
-        { 0xFFFF, 0xFFFF, false },   // allocation fails (too much RAM)
     };
 
     for (size_t i = 0; i < SK_ARRAY_COUNT(gTests); ++i) {
@@ -266,8 +226,6 @@ static void test_nan_antihair() {
 }
 
 static bool check_for_all_zeros(const SkBitmap& bm) {
-    SkAutoLockPixels alp(bm);
-
     size_t count = bm.width() * bm.bytesPerPixel();
     for (int y = 0; y < bm.height(); y++) {
         const uint8_t* ptr = reinterpret_cast<const uint8_t*>(bm.getAddr(0, y));
@@ -308,5 +266,4 @@ DEF_TEST(DrawBitmapRect, reporter) {
     test_giantrepeat_crbug118018(reporter);
 
     test_treatAsSprite(reporter);
-    test_faulty_pixelref(reporter);
 }
