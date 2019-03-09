@@ -5,6 +5,10 @@
  * found in the LICENSE file.
  */
 
+#include "SkTestSVGTypeface.h"
+
+#ifdef SK_XML
+
 #include "Resources.h"
 #include "SkAdvancedTypefaceMetrics.h"
 #include "SkBitmap.h"
@@ -13,6 +17,7 @@
 #include "SkData.h"
 #include "SkEncodedImageFormat.h"
 #include "SkFontDescriptor.h"
+#include "SkFontPriv.h"
 #include "SkFontStyle.h"
 #include "SkGeometry.h"
 #include "SkGlyph.h"
@@ -35,7 +40,6 @@
 #include "SkSize.h"
 #include "SkStream.h"
 #include "SkSurface.h"
-#include "SkTestSVGTypeface.h"
 #include "SkTDArray.h"
 #include "SkTemplates.h"
 #include "SkUtils.h"
@@ -46,7 +50,7 @@ class SkDescriptor;
 
 SkTestSVGTypeface::SkTestSVGTypeface(const char* name,
                                      int upem,
-                                     const SkPaint::FontMetrics& fontMetrics,
+                                     const SkFontMetrics& fontMetrics,
                                      const SkSVGTestTypefaceGlyphData* data, int dataCount,
                                      const SkFontStyle& style)
     : SkTypeface(style, false)
@@ -92,23 +96,25 @@ void SkTestSVGTypeface::getAdvance(SkGlyph* glyph) const {
     glyph->fAdvanceY = 0;
 }
 
-void SkTestSVGTypeface::getFontMetrics(SkPaint::FontMetrics* metrics) const {
+void SkTestSVGTypeface::getFontMetrics(SkFontMetrics* metrics) const {
     *metrics = fFontMetrics;
 }
 
 void SkTestSVGTypeface::onFilterRec(SkScalerContextRec* rec) const {
-    rec->setHinting(SkPaint::kNo_Hinting);
+    rec->setHinting(kNo_SkFontHinting);
+}
+
+void SkTestSVGTypeface::getGlyphToUnicodeMap(SkUnichar* glyphToUnicode) const {
+    SkDEBUGCODE(unsigned glyphCount = this->countGlyphs());
+    fCMap.foreach([=](const SkUnichar& c, const SkGlyphID& g) {
+        SkASSERT(g < glyphCount);
+        glyphToUnicode[g] = c;
+    });
 }
 
 std::unique_ptr<SkAdvancedTypefaceMetrics> SkTestSVGTypeface::onGetAdvancedMetrics() const {
     std::unique_ptr<SkAdvancedTypefaceMetrics> info(new SkAdvancedTypefaceMetrics);
-    info->fFontName.set(fName);
-
-    SkTDArray<SkUnichar>& toUnicode = info->fGlyphToUnicode;
-    toUnicode.setCount(fGlyphCount);
-    fCMap.foreach([&toUnicode](const SkUnichar& c, const SkGlyphID& g) {
-        toUnicode[g] = c;
-    });
+    info->fFontName = fName;
     return info;
 }
 
@@ -156,43 +162,42 @@ public:
         : SkScalerContext(std::move(face), effects, desc)
     {
         fRec.getSingleMatrix(&fMatrix);
-        SkScalar upem = this->geTestSVGTypeface()->fUpem;
+        SkScalar upem = this->getTestSVGTypeface()->fUpem;
         fMatrix.preScale(1.f/upem, 1.f/upem);
     }
 
 protected:
-    SkTestSVGTypeface* geTestSVGTypeface() const {
+    SkTestSVGTypeface* getTestSVGTypeface() const {
         return static_cast<SkTestSVGTypeface*>(this->getTypeface());
     }
 
     unsigned generateGlyphCount() override {
-        return this->geTestSVGTypeface()->onCountGlyphs();
+        return this->getTestSVGTypeface()->countGlyphs();
     }
 
     uint16_t generateCharToGlyph(SkUnichar u) override {
-        uint16_t g;
-        (void) this->geTestSVGTypeface()->onCharsToGlyphs(&u, SkTypeface::kUTF32_Encoding, &g, 1);
-        return g;
+        return this->getTestSVGTypeface()->unicharToGlyph(u);
     }
 
-    void generateAdvance(SkGlyph* glyph) override {
-        this->geTestSVGTypeface()->getAdvance(glyph);
+    bool generateAdvance(SkGlyph* glyph) override {
+        this->getTestSVGTypeface()->getAdvance(glyph);
 
         const SkVector advance = fMatrix.mapXY(SkFloatToScalar(glyph->fAdvanceX),
                                                SkFloatToScalar(glyph->fAdvanceY));
         glyph->fAdvanceX = SkScalarToFloat(advance.fX);
         glyph->fAdvanceY = SkScalarToFloat(advance.fY);
+        return true;
     }
 
     void generateMetrics(SkGlyph* glyph) override {
         SkGlyphID glyphID = glyph->getGlyphID();
-        glyphID = glyphID < this->geTestSVGTypeface()->fGlyphCount ? glyphID : 0;
+        glyphID = glyphID < this->getTestSVGTypeface()->fGlyphCount ? glyphID : 0;
 
         glyph->zeroMetrics();
         glyph->fMaskFormat = SkMask::kARGB32_Format;
         this->generateAdvance(glyph);
 
-        SkTestSVGTypeface::Glyph& glyphData = this->geTestSVGTypeface()->fGlyphs[glyphID];
+        SkTestSVGTypeface::Glyph& glyphData = this->getTestSVGTypeface()->fGlyphs[glyphID];
         if (!glyphData.fSvg) {
             return;
         }
@@ -215,7 +220,7 @@ protected:
 
     void generateImage(const SkGlyph& glyph) override {
         SkGlyphID glyphID = glyph.getGlyphID();
-        glyphID = glyphID < this->geTestSVGTypeface()->fGlyphCount ? glyphID : 0;
+        glyphID = glyphID < this->getTestSVGTypeface()->fGlyphCount ? glyphID : 0;
 
         SkBitmap bm;
         // TODO: this should be SkImageInfo::MakeS32 when that passes all the tests.
@@ -223,7 +228,7 @@ protected:
                          glyph.fImage, glyph.rowBytes());
         bm.eraseColor(0);
 
-        SkTestSVGTypeface::Glyph& glyphData = this->geTestSVGTypeface()->fGlyphs[glyphID];
+        SkTestSVGTypeface::Glyph& glyphData = this->getTestSVGTypeface()->fGlyphs[glyphID];
 
         SkScalar dx = SkFixedToScalar(glyph.getSubXFixed());
         SkScalar dy = SkFixedToScalar(glyph.getSubYFixed());
@@ -245,9 +250,9 @@ protected:
         return false;
     }
 
-    void generateFontMetrics(SkPaint::FontMetrics* metrics) override {
-        this->geTestSVGTypeface()->getFontMetrics(metrics);
-        SkPaintPriv::ScaleFontMetrics(metrics, fMatrix.getScaleY());
+    void generateFontMetrics(SkFontMetrics* metrics) override {
+        this->getTestSVGTypeface()->getFontMetrics(metrics);
+        SkFontPriv::ScaleFontMetrics(metrics, fMatrix.getScaleY());
     }
 
 private:
@@ -269,11 +274,11 @@ constexpr const static SkSVGTestTypefaceGlyphData gGlyphs[] = {
 };
 
 sk_sp<SkTestSVGTypeface> SkTestSVGTypeface::Default() {
-    SkPaint::FontMetrics metrics;
-    metrics.fFlags = SkPaint::FontMetrics::kUnderlineThicknessIsValid_Flag |
-                     SkPaint::FontMetrics::kUnderlinePositionIsValid_Flag  |
-                     SkPaint::FontMetrics::kStrikeoutThicknessIsValid_Flag |
-                     SkPaint::FontMetrics::kStrikeoutPositionIsValid_Flag;
+    SkFontMetrics metrics;
+    metrics.fFlags = SkFontMetrics::kUnderlineThicknessIsValid_Flag |
+                     SkFontMetrics::kUnderlinePositionIsValid_Flag  |
+                     SkFontMetrics::kStrikeoutThicknessIsValid_Flag |
+                     SkFontMetrics::kStrikeoutPositionIsValid_Flag;
     metrics.fTop = -800;
     metrics.fAscent = -800;
     metrics.fDescent = 200;
@@ -622,13 +627,13 @@ void SkTestSVGTypeface::exportTtxCbdt(SkWStream* out) const {
     int strikeSizes[3] = { 16, 64, 128 };
 
     SkPaint paint;
-    paint.setTypeface(sk_ref_sp(const_cast<SkTestSVGTypeface*>(this)));
-    paint.setTextEncoding(SkPaint::kGlyphID_TextEncoding);
+    SkFont font;
+    font.setTypeface(sk_ref_sp(const_cast<SkTestSVGTypeface*>(this)));
 
     out->writeText("  <CBDT>\n");
     out->writeText("    <header version=\"2.0\"/>\n");
     for (size_t strikeIndex = 0; strikeIndex < SK_ARRAY_COUNT(strikeSizes); ++strikeIndex) {
-        paint.setTextSize(strikeSizes[strikeIndex]);
+        font.setSize(strikeSizes[strikeIndex]);
         out->writeText("    <strikedata index=\"");
             out->writeDecAsText(strikeIndex);
             out->writeText("\">\n");
@@ -636,7 +641,7 @@ void SkTestSVGTypeface::exportTtxCbdt(SkWStream* out) const {
             SkGlyphID gid = i;
             SkScalar advance;
             SkRect bounds;
-            paint.getTextWidths(&gid, sizeof(gid), &advance, &bounds);
+            font.getWidthsBounds(&gid, 1, &advance, &bounds, nullptr);
             SkIRect ibounds = bounds.roundOut();
             if (ibounds.isEmpty()) {
                 continue;
@@ -648,8 +653,9 @@ void SkTestSVGTypeface::exportTtxCbdt(SkWStream* out) const {
             canvas->clear(0);
             SkPixmap pix;
             surface->peekPixels(&pix);
-            canvas->drawText(&gid, sizeof(gid), -bounds.fLeft, -bounds.fTop, paint);
-            canvas->flush();
+            canvas->drawSimpleText(&gid, sizeof(gid), kGlyphID_SkTextEncoding,
+                                   -bounds.fLeft, -bounds.fTop, font, paint);
+            surface->flush();
             sk_sp<SkImage> image = surface->makeImageSnapshot();
             sk_sp<SkData> data = image->encodeToData(SkEncodedImageFormat::kPNG, 100);
 
@@ -691,12 +697,12 @@ void SkTestSVGTypeface::exportTtxCbdt(SkWStream* out) const {
     }
     out->writeText("  </CBDT>\n");
 
-    SkPaint::FontMetrics fm;
+    SkFontMetrics fm;
     out->writeText("  <CBLC>\n");
     out->writeText("    <header version=\"2.0\"/>\n");
     for (size_t strikeIndex = 0; strikeIndex < SK_ARRAY_COUNT(strikeSizes); ++strikeIndex) {
-        paint.setTextSize(strikeSizes[strikeIndex]);
-        paint.getFontMetrics(&fm);
+        font.setSize(strikeSizes[strikeIndex]);
+        font.getMetrics(&fm);
         out->writeText("    <strike index=\"");
             out->writeDecAsText(strikeIndex);
             out->writeText("\">\n");
@@ -757,7 +763,7 @@ void SkTestSVGTypeface::exportTtxCbdt(SkWStream* out) const {
         for (int i = 0; i < fGlyphCount; ++i) {
             SkGlyphID gid = i;
             SkRect bounds;
-            paint.getTextWidths(&gid, sizeof(gid), nullptr, &bounds);
+            font.getBounds(&gid, 1, &bounds, nullptr);
             if (bounds.isEmpty()) {
                 continue;
             }
@@ -790,8 +796,8 @@ void SkTestSVGTypeface::exportTtxSbix(SkWStream* out) const {
     this->exportTtxCommon(out, "sbix");
 
     SkPaint paint;
-    paint.setTypeface(sk_ref_sp(const_cast<SkTestSVGTypeface*>(this)));
-    paint.setTextEncoding(SkPaint::kGlyphID_TextEncoding);
+    SkFont font;
+    font.setTypeface(sk_ref_sp(const_cast<SkTestSVGTypeface*>(this)));
 
     out->writeText("  <glyf>\n");
     for (int i = 0; i < fGlyphCount; ++i) {
@@ -841,7 +847,7 @@ void SkTestSVGTypeface::exportTtxSbix(SkWStream* out) const {
     out->writeText("    <version value=\"1\"/>\n");
     out->writeText("    <flags value=\"00000000 00000001\"/>\n");
     for (size_t strikeIndex = 0; strikeIndex < SK_ARRAY_COUNT(strikeSizes); ++strikeIndex) {
-        paint.setTextSize(strikeSizes[strikeIndex]);
+        font.setSize(strikeSizes[strikeIndex]);
         out->writeText("    <strike>\n");
         out->writeText("      <ppem value=\"");
             out->writeDecAsText(strikeSizes[strikeIndex]);
@@ -851,7 +857,7 @@ void SkTestSVGTypeface::exportTtxSbix(SkWStream* out) const {
             SkGlyphID gid = i;
             SkScalar advance;
             SkRect bounds;
-            paint.getTextWidths(&gid, sizeof(gid), &advance, &bounds);
+            font.getWidthsBounds(&gid, 1, &advance, &bounds, nullptr);
             SkIRect ibounds = bounds.roundOut();
             if (ibounds.isEmpty()) {
                 continue;
@@ -863,8 +869,9 @@ void SkTestSVGTypeface::exportTtxSbix(SkWStream* out) const {
             canvas->clear(0);
             SkPixmap pix;
             surface->peekPixels(&pix);
-            canvas->drawText(&gid, sizeof(gid), -bounds.fLeft, -bounds.fTop, paint);
-            canvas->flush();
+            canvas->drawSimpleText(&gid, sizeof(gid), kGlyphID_SkTextEncoding,
+                                   -bounds.fLeft, -bounds.fTop, font, paint);
+            surface->flush();
             sk_sp<SkImage> image = surface->makeImageSnapshot();
             sk_sp<SkData> data = image->encodeToData(SkEncodedImageFormat::kPNG, 100);
 
@@ -1294,3 +1301,4 @@ void SkTestSVGTypeface::exportTtxColr(SkWStream* out) const {
 
     out->writeText("</ttFont>\n");
 }
+#endif  // SK_XML

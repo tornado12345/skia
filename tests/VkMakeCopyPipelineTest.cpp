@@ -9,11 +9,13 @@
 
 #include "SkTypes.h"
 
-#if SK_SUPPORT_GPU && defined(SK_VULKAN)
+#if defined(SK_VULKAN)
 
+#include "vk/GrVkVulkan.h"
+
+#include "GrBackendSurface.h"
 #include "GrContextFactory.h"
 #include "GrContextPriv.h"
-#include "GrTest.h"
 #include "GrTexture.h"
 #include "Test.h"
 #include "vk/GrVkCopyPipeline.h"
@@ -44,7 +46,7 @@ public:
 
             "// Copy Program VS\n"
             "void main() {"
-            "vTexCoord = inPosition * uTexCoordXform.xy + uTexCoordXform.zw;"
+            "vTexCoord = half2(inPosition * uTexCoordXform.xy + uTexCoordXform.zw);"
             "sk_Position.xy = inPosition * uPosXform.xy + uPosXform.zw;"
             "sk_Position.zw = half2(0, 1);"
             "}";
@@ -62,9 +64,11 @@ public:
             "}";
 
         SkSL::Program::Settings settings;
+        SkSL::String spirv;
         SkSL::Program::Inputs inputs;
         if (!GrCompileVkShaderModule(gpu, vertShaderText, VK_SHADER_STAGE_VERTEX_BIT,
-                                     &fVertShaderModule, &fShaderStageInfo[0], settings, &inputs)) {
+                                     &fVertShaderModule, &fShaderStageInfo[0], settings,
+                                     &spirv, &inputs)) {
             this->destroyResources(gpu);
             REPORTER_ASSERT(reporter, false);
             return;
@@ -72,7 +76,8 @@ public:
         SkASSERT(inputs.isEmpty());
 
         if (!GrCompileVkShaderModule(gpu, fragShaderText, VK_SHADER_STAGE_FRAGMENT_BIT,
-                                     &fFragShaderModule, &fShaderStageInfo[1], settings, &inputs)) {
+                                     &fFragShaderModule, &fShaderStageInfo[1], settings,
+                                     &spirv, &inputs)) {
             this->destroyResources(gpu);
             REPORTER_ASSERT(reporter, false);
             return;
@@ -176,7 +181,7 @@ public:
 
 DEF_GPUTEST_FOR_VULKAN_CONTEXT(VkMakeCopyPipelineTest, reporter, ctxInfo) {
     GrContext* context = ctxInfo.grContext();
-    GrVkGpu* gpu = static_cast<GrVkGpu*>(context->contextPriv().getGpu());
+    GrVkGpu* gpu = static_cast<GrVkGpu*>(context->priv().getGpu());
 
     TestVkCopyProgram copyProgram;
     copyProgram.test(gpu, reporter);

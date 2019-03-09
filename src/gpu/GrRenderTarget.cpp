@@ -14,6 +14,7 @@
 #include "GrGpu.h"
 #include "GrRenderTargetOpList.h"
 #include "GrRenderTargetPriv.h"
+#include "GrSamplePatternDictionary.h"
 #include "GrStencilAttachment.h"
 #include "GrStencilSettings.h"
 #include "SkRectPriv.h"
@@ -22,12 +23,14 @@ GrRenderTarget::GrRenderTarget(GrGpu* gpu, const GrSurfaceDesc& desc,
                                GrStencilAttachment* stencil)
         : INHERITED(gpu, desc)
         , fSampleCnt(desc.fSampleCnt)
+        , fSamplePatternKey(GrSamplePatternDictionary::kInvalidSamplePatternKey)
         , fStencilAttachment(stencil) {
     SkASSERT(desc.fFlags & kRenderTarget_GrSurfaceFlag);
     SkASSERT(!this->hasMixedSamples() || fSampleCnt > 1);
-    SkASSERT(!this->supportsWindowRects() || gpu->caps()->maxWindowRectangles() > 0);
     fResolveRect = SkRectPriv::MakeILargestInverted();
 }
+
+GrRenderTarget::~GrRenderTarget() = default;
 
 void GrRenderTarget::flagAsNeedingResolve(const SkIRect* rect) {
     if (kCanResolve_ResolveType == getResolveType()) {
@@ -58,34 +61,47 @@ void GrRenderTarget::flagAsResolved() {
 }
 
 void GrRenderTarget::onRelease() {
-    SkSafeSetNull(fStencilAttachment);
+    fStencilAttachment = nullptr;
 
     INHERITED::onRelease();
 }
 
 void GrRenderTarget::onAbandon() {
-    SkSafeSetNull(fStencilAttachment);
+    fStencilAttachment = nullptr;
 
     INHERITED::onAbandon();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-bool GrRenderTargetPriv::attachStencilAttachment(sk_sp<GrStencilAttachment> stencil) {
+void GrRenderTargetPriv::attachStencilAttachment(sk_sp<GrStencilAttachment> stencil) {
     if (!stencil && !fRenderTarget->fStencilAttachment) {
         // No need to do any work since we currently don't have a stencil attachment and
         // we're not actually adding one.
-        return true;
+        return;
     }
-    fRenderTarget->fStencilAttachment = stencil.release();
+    fRenderTarget->fStencilAttachment = std::move(stencil);
     if (!fRenderTarget->completeStencilAttachment()) {
-        SkSafeSetNull(fRenderTarget->fStencilAttachment);
-        return false;
+        fRenderTarget->fStencilAttachment = nullptr;
     }
-    return true;
 }
 
 int GrRenderTargetPriv::numStencilBits() const {
     SkASSERT(this->getStencilAttachment());
     return this->getStencilAttachment()->bits();
+}
+
+int GrRenderTargetPriv::getSamplePatternKey(const GrPipeline& pipeline) const {
+    SkASSERT(fRenderTarget->fSampleCnt > 1);
+    if (GrSamplePatternDictionary::kInvalidSamplePatternKey == fRenderTarget->fSamplePatternKey) {
+        fRenderTarget->fSamplePatternKey =
+                fRenderTarget->getGpu()->findOrAssignSamplePatternKey(fRenderTarget, pipeline);
+    }
+    SkASSERT(GrSamplePatternDictionary::kInvalidSamplePatternKey
+                     != fRenderTarget->fSamplePatternKey);
+    // Verify we always have the same sample pattern key every time this is called, regardless of
+    // pipeline state.
+    SkASSERT(fRenderTarget->getGpu()->findOrAssignSamplePatternKey(fRenderTarget, pipeline)
+                     == fRenderTarget->fSamplePatternKey);
+    return fRenderTarget->fSamplePatternKey;
 }

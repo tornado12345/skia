@@ -10,7 +10,8 @@
  **************************************************************************************************/
 #include "GrRRectBlurEffect.h"
 
-std::unique_ptr<GrFragmentProcessor> GrRRectBlurEffect::Make(GrContext* context, float sigma,
+std::unique_ptr<GrFragmentProcessor> GrRRectBlurEffect::Make(GrRecordingContext* context,
+                                                             float sigma,
                                                              float xformedSigma,
                                                              const SkRRect& srcRRect,
                                                              const SkRRect& devRRect) {
@@ -67,31 +68,31 @@ public:
         (void)rect;
         auto cornerRadius = _outer.cornerRadius();
         (void)cornerRadius;
-        fCornerRadiusVar = args.fUniformHandler->addUniform(kFragment_GrShaderFlag, kFloat_GrSLType,
-                                                            kDefault_GrSLPrecision, "cornerRadius");
+        fCornerRadiusVar = args.fUniformHandler->addUniform(kFragment_GrShaderFlag, kHalf_GrSLType,
+                                                            "cornerRadius");
         fProxyRectVar = args.fUniformHandler->addUniform(kFragment_GrShaderFlag, kFloat4_GrSLType,
-                                                         kDefault_GrSLPrecision, "proxyRect");
+                                                         "proxyRect");
         fBlurRadiusVar = args.fUniformHandler->addUniform(kFragment_GrShaderFlag, kHalf_GrSLType,
-                                                          kDefault_GrSLPrecision, "blurRadius");
+                                                          "blurRadius");
         fragBuilder->codeAppendf(
-                "\nhalf2 translatedFragPos = half2(sk_FragCoord.xy - %s.xy);\nhalf threshold = "
-                "half(%s + 2.0 * float(%s));\nhalf2 middle = half2((%s.zw - %s.xy) - 2.0 * "
-                "float(threshold));\nif (translatedFragPos.x >= threshold && translatedFragPos.x < "
-                "middle.x + threshold) {\n    translatedFragPos.x = threshold;\n} else if "
-                "(translatedFragPos.x >= middle.x + threshold) {\n    translatedFragPos.x -= "
-                "float(middle.x) - 1.0;\n}\nif (translatedFragPos.y > threshold && "
-                "translatedFragPos.y < middle.y + threshold) {\n    translatedFr",
+                "\nhalf2 translatedFragPos = half2(sk_FragCoord.xy - %s.xy);\nhalf threshold = %s "
+                "+ 2.0 * %s;\nhalf2 middle = half2((%s.zw - %s.xy) - float(2.0 * threshold));\nif "
+                "(translatedFragPos.x >= threshold && translatedFragPos.x < middle.x + threshold) "
+                "{\n    translatedFragPos.x = threshold;\n} else if (translatedFragPos.x >= "
+                "middle.x + threshold) {\n    translatedFragPos.x -= middle.x - 1.0;\n}\nif "
+                "(translatedFragPos.y > threshold && translatedFragPos.y < middle.y + threshold) "
+                "{\n    translatedFragPos.y = threshold;",
                 args.fUniformHandler->getUniformCStr(fProxyRectVar),
                 args.fUniformHandler->getUniformCStr(fCornerRadiusVar),
                 args.fUniformHandler->getUniformCStr(fBlurRadiusVar),
                 args.fUniformHandler->getUniformCStr(fProxyRectVar),
                 args.fUniformHandler->getUniformCStr(fProxyRectVar));
         fragBuilder->codeAppendf(
-                "agPos.y = threshold;\n} else if (translatedFragPos.y >= middle.y + threshold) {\n "
-                "   translatedFragPos.y -= float(middle.y) - 1.0;\n}\nhalf2 proxyDims = "
-                "half2(half(2.0 * float(threshold) + 1.0));\nhalf2 texCoord = translatedFragPos / "
-                "proxyDims;\n%s = %s * texture(%s, float2(texCoord)).%s;\n",
-                args.fOutputColor, args.fInputColor ? args.fInputColor : "half4(1)",
+                "\n} else if (translatedFragPos.y >= middle.y + threshold) {\n    "
+                "translatedFragPos.y -= middle.y - 1.0;\n}\nhalf2 proxyDims = half2(2.0 * "
+                "threshold + 1.0);\nhalf2 texCoord = translatedFragPos / proxyDims;\n%s = %s * "
+                "texture(%s, float2(texCoord)).%s;\n",
+                args.fOutputColor, args.fInputColor,
                 fragBuilder->getProgramBuilder()->samplerVariable(args.fTexSamplers[0]).c_str(),
                 fragBuilder->getProgramBuilder()->samplerSwizzle(args.fTexSamplers[0]).c_str());
     }
@@ -100,7 +101,7 @@ private:
     void onSetData(const GrGLSLProgramDataManager& pdman,
                    const GrFragmentProcessor& _proc) override {
         const GrRRectBlurEffect& _outer = _proc.cast<GrRRectBlurEffect>();
-        { pdman.set1f(fCornerRadiusVar, _outer.cornerRadius()); }
+        { pdman.set1f(fCornerRadiusVar, (_outer.cornerRadius())); }
         auto sigma = _outer.sigma();
         (void)sigma;
         auto rect = _outer.rect();
@@ -108,7 +109,7 @@ private:
         UniformHandle& cornerRadius = fCornerRadiusVar;
         (void)cornerRadius;
         GrSurfaceProxy& ninePatchSamplerProxy = *_outer.textureSampler(0).proxy();
-        GrTexture& ninePatchSampler = *ninePatchSamplerProxy.priv().peekTexture();
+        GrTexture& ninePatchSampler = *ninePatchSamplerProxy.peekTexture();
         (void)ninePatchSampler;
         UniformHandle& proxyRect = fProxyRectVar;
         (void)proxyRect;
@@ -146,10 +147,13 @@ GrRRectBlurEffect::GrRRectBlurEffect(const GrRRectBlurEffect& src)
         , fRect(src.fRect)
         , fCornerRadius(src.fCornerRadius)
         , fNinePatchSampler(src.fNinePatchSampler) {
-    this->addTextureSampler(&fNinePatchSampler);
+    this->setTextureSamplerCnt(1);
 }
 std::unique_ptr<GrFragmentProcessor> GrRRectBlurEffect::clone() const {
     return std::unique_ptr<GrFragmentProcessor>(new GrRRectBlurEffect(*this));
+}
+const GrFragmentProcessor::TextureSampler& GrRRectBlurEffect::onTextureSampler(int index) const {
+    return IthTextureSampler(index, fNinePatchSampler);
 }
 GR_DEFINE_FRAGMENT_PROCESSOR_TEST(GrRRectBlurEffect);
 #if GR_TEST_UTILS

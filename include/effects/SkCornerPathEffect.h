@@ -8,6 +8,7 @@
 #ifndef SkCornerPathEffect_DEFINED
 #define SkCornerPathEffect_DEFINED
 
+#include "SkFlattenable.h"
 #include "SkPathEffect.h"
 
 /** \class SkCornerPathEffect
@@ -24,23 +25,16 @@ public:
         return radius > 0 ? sk_sp<SkPathEffect>(new SkCornerPathEffect(radius)) : nullptr;
     }
 
-    virtual bool filterPath(SkPath* dst, const SkPath& src,
-                            SkStrokeRec*, const SkRect*) const override;
-
-    void toString(SkString* str) const override;
-    SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(SkCornerPathEffect)
-
-#ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
-    bool exposedInAndroidJavaAPI() const override { return true; }
-#endif
-
 protected:
     ~SkCornerPathEffect() override;
 
     explicit SkCornerPathEffect(SkScalar radius);
     void flatten(SkWriteBuffer&) const override;
+    bool onFilterPath(SkPath* dst, const SkPath& src, SkStrokeRec*, const SkRect*) const override;
 
 private:
+    SK_FLATTENABLE_HOOKS(SkCornerPathEffect)
+
     SkScalar    fRadius;
 
     typedef SkPathEffect INHERITED;

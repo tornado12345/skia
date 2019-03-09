@@ -11,6 +11,7 @@
 #include "SkFilterQuality.h"
 #include "SkMask.h"
 #include "SkMatrix.h"
+#include "SkNoncopyable.h"
 #include "SkShader.h"
 #include "SkTLazy.h"
 
@@ -61,24 +62,21 @@ public:
      *  ContextRec acts as a parameter bundle for creating Contexts.
      */
     struct ContextRec {
-        enum DstType {
-            kPMColor_DstType, // clients prefer shading into PMColor dest
-            kPM4f_DstType,    // clients prefer shading into PM4f dest
-        };
-
         ContextRec(const SkPaint& paint, const SkMatrix& matrix, const SkMatrix* localM,
-                   DstType dstType, SkColorSpace* dstColorSpace)
+                   SkColorType dstColorType, SkColorSpace* dstColorSpace)
             : fPaint(&paint)
             , fMatrix(&matrix)
             , fLocalMatrix(localM)
-            , fPreferredDstType(dstType)
+            , fDstColorType(dstColorType)
             , fDstColorSpace(dstColorSpace) {}
 
         const SkPaint*  fPaint;            // the current paint associated with the draw
         const SkMatrix* fMatrix;           // the current matrix in the canvas
         const SkMatrix* fLocalMatrix;      // optional local matrix
-        const DstType   fPreferredDstType; // the "natural" client dest type
+        SkColorType     fDstColorType;     // the color type of the dest surface
         SkColorSpace*   fDstColorSpace;    // the color space of the dest surface (if any)
+
+        bool isLegacyCompatible(SkColorSpace* shadersColorSpace) const;
     };
 
     class Context : public ::SkNoncopyable {
@@ -103,11 +101,6 @@ public:
          */
         virtual void shadeSpan(int x, int y, SkPMColor[], int count) = 0;
 
-        virtual void shadeSpan4f(int x, int y, SkPM4f[], int count);
-
-        // Notification from blitter::blitMask in case we need to see the non-alpha channels
-        virtual void set3DMask(const SkMask*) {}
-
     protected:
         // Reference to shader, so we don't have to dupe information.
         const SkShaderBase& fShader;
@@ -130,15 +123,6 @@ public:
      * @return pointer to context or nullptr if can't be created
      */
     Context* makeContext(const ContextRec&, SkArenaAlloc*) const;
-
-    /**
-     * Shaders may opt-in for burst mode, if they can operate
-     * significantly more efficiently in that mode.
-     *
-     * Burst mode is prioritized in SkRasterPipelineBlitter over
-     * regular (appendStages) pipeline operation.
-     */
-    Context* makeBurstPipelineContext(const ContextRec&, SkArenaAlloc*) const;
 
 #if SK_SUPPORT_GPU
     /**
@@ -177,6 +161,7 @@ public:
     struct StageRec {
         SkRasterPipeline*   fPipeline;
         SkArenaAlloc*       fAlloc;
+        SkColorType         fDstColorType;
         SkColorSpace*       fDstCS;         // may be nullptr
         const SkPaint&      fPaint;
         const SkMatrix*     fLocalM;        // may be nullptr
@@ -197,26 +182,26 @@ public:
     SkTCopyOnFirstWrite<SkMatrix> totalLocalMatrix(const SkMatrix* preLocalMatrix,
                                                    const SkMatrix* postLocalMatrix = nullptr) const;
 
-#ifdef SK_SUPPORT_LEGACY_SHADER_ISABITMAP
-    virtual bool onIsABitmap(SkBitmap*, SkMatrix*, TileMode[2]) const {
-        return false;
-    }
-#endif
-
     virtual SkImage* onIsAImage(SkMatrix*, TileMode[2]) const {
         return nullptr;
     }
 
-    virtual void toString(SkString* str) const;
+    static Type GetFlattenableType() { return kSkShaderBase_Type; }
+    Type getFlattenableType() const override { return GetFlattenableType(); }
 
-    SK_DEFINE_FLATTENABLE_TYPE(SkShaderBase)
-    SK_DECLARE_FLATTENABLE_REGISTRAR_GROUP()
+    static sk_sp<SkShaderBase> Deserialize(const void* data, size_t size,
+                                             const SkDeserialProcs* procs = nullptr) {
+        return sk_sp<SkShaderBase>(static_cast<SkShaderBase*>(
+                SkFlattenable::Deserialize(GetFlattenableType(), data, size, procs).release()));
+    }
+    static void RegisterFlattenables();
 
 protected:
     SkShaderBase(const SkMatrix* localMatrix = nullptr);
 
     void flatten(SkWriteBuffer&) const override;
 
+#ifdef SK_ENABLE_LEGACY_SHADERCONTEXT
     /**
      * Specialize creating a SkShader context using the supplied allocator.
      * @return pointer to context owned by the arena allocator.
@@ -231,6 +216,7 @@ protected:
     virtual Context* onMakeBurstPipelineContext(const ContextRec&, SkArenaAlloc*) const {
         return nullptr;
     }
+#endif
 
     virtual bool onAsLuminanceColor(SkColor*) const {
         return false;

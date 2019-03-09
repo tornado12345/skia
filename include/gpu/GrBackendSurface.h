@@ -11,12 +11,13 @@
 #include "GrTypes.h"
 #include "gl/GrGLTypes.h"
 #include "mock/GrMockTypes.h"
-
-#ifdef SK_VULKAN
 #include "vk/GrVkTypes.h"
 #include "../private/GrVkTypesPriv.h"
 
 class GrVkImageLayout;
+
+#ifdef SK_METAL
+#include "mtl/GrMtlTypes.h"
 #endif
 
 #if !SK_SUPPORT_GPU
@@ -46,8 +47,17 @@ public:
         return GrBackendFormat(format, target);
     }
 
-#ifdef SK_VULKAN
     static GrBackendFormat MakeVk(VkFormat format) {
+        return GrBackendFormat(format, GrVkYcbcrConversionInfo());
+    }
+
+    // This is used for external textures and the VkFormat is assumed to be VK_FORMAT_UNDEFINED.
+    // This call is only supported on Android since the GrVkYcbcrConvesionInfo contains an android
+    // external format.
+    static GrBackendFormat MakeVk(const GrVkYcbcrConversionInfo& ycbcrInfo);
+
+#ifdef SK_METAL
+    static GrBackendFormat MakeMtl(GrMTLPixelFormat format) {
         return GrBackendFormat(format);
     }
 #endif
@@ -56,22 +66,35 @@ public:
         return GrBackendFormat(config);
     }
 
-    GrBackend backend() const {return fBackend; }
+    bool operator==(const GrBackendFormat& that) const;
+    bool operator!=(const GrBackendFormat& that) const { return !(*this == that); }
+
+    GrBackendApi backend() const { return fBackend; }
+    GrTextureType textureType() const { return fTextureType; }
 
     // If the backend API is GL, these return a pointer to the format and target. Otherwise
     // it returns nullptr.
     const GrGLenum* getGLFormat() const;
     const GrGLenum* getGLTarget() const;
 
-#ifdef SK_VULKAN
     // If the backend API is Vulkan, this returns a pointer to a VkFormat. Otherwise
     // it returns nullptr
     const VkFormat* getVkFormat() const;
+
+    const GrVkYcbcrConversionInfo* getVkYcbcrConversionInfo() const;
+
+#ifdef SK_METAL
+    // If the backend API is Metal, this returns a pointer to a GrMTLPixelFormat. Otherwise
+    // it returns nullptr
+    const GrMTLPixelFormat* getMtlFormat() const;
 #endif
 
     // If the backend API is Mock, this returns a pointer to a GrPixelConfig. Otherwise
     // it returns nullptr.
     const GrPixelConfig* getMockFormat() const;
+
+    // If possible, copies the GrBackendFormat and forces the texture type to be Texture2D
+    GrBackendFormat makeTexture2D() const;
 
     // Returns true if the backend format has been initialized.
     bool isValid() const { return fValid; }
@@ -79,25 +102,29 @@ public:
 private:
     GrBackendFormat(GrGLenum format, GrGLenum target);
 
-#ifdef SK_VULKAN
-    GrBackendFormat(const VkFormat vkFormat);
+    GrBackendFormat(const VkFormat vkFormat, const GrVkYcbcrConversionInfo&);
+
+#ifdef SK_METAL
+    GrBackendFormat(const GrMTLPixelFormat mtlFormat);
 #endif
 
     GrBackendFormat(const GrPixelConfig config);
 
-    GrBackend fBackend;
+    GrBackendApi fBackend;
     bool      fValid;
 
     union {
+        GrGLenum         fGLFormat; // the sized, internal format of the GL resource
         struct {
-            GrGLenum fTarget; // GL_TEXTURE_2D, GL_TEXTURE_EXTERNAL or GL_TEXTURE_RECTANGLE
-            GrGLenum fFormat; // the sized, internal format of the GL resource
-        } fGL;
-#ifdef SK_VULKAN
-        VkFormat      fVkFormat;
+            VkFormat                 fFormat;
+            GrVkYcbcrConversionInfo  fYcbcrConversionInfo;
+        } fVk;
+#ifdef SK_METAL
+        GrMTLPixelFormat fMtlFormat;
 #endif
-        GrPixelConfig fMockFormat;
+        GrPixelConfig    fMockFormat;
     };
+    GrTextureType fTextureType;
 };
 
 class SK_API GrBackendTexture {
@@ -105,33 +132,21 @@ public:
     // Creates an invalid backend texture.
     GrBackendTexture() : fIsValid(false) {}
 
-#if GR_TEST_UTILS
-    // GrGLTextureInfo::fFormat is ignored
-    // Deprecated: Should use version that does not take a GrPixelConfig instead
-    GrBackendTexture(int width,
-                     int height,
-                     GrPixelConfig config,
-                     const GrGLTextureInfo& glInfo);
-
-    // GrGLTextureInfo::fFormat is ignored
-    // Deprecated: Should use version that does not take a GrPixelConfig instead
-    GrBackendTexture(int width,
-                     int height,
-                     GrPixelConfig config,
-                     GrMipMapped,
-                     const GrGLTextureInfo& glInfo);
-#endif
-
     // The GrGLTextureInfo must have a valid fFormat.
     GrBackendTexture(int width,
                      int height,
                      GrMipMapped,
                      const GrGLTextureInfo& glInfo);
 
-#ifdef SK_VULKAN
     GrBackendTexture(int width,
                      int height,
                      const GrVkImageInfo& vkInfo);
+
+#ifdef SK_METAL
+    GrBackendTexture(int width,
+                     int height,
+                     GrMipMapped,
+                     const GrMtlTextureInfo& mtlInfo);
 #endif
 
     GrBackendTexture(int width,
@@ -148,13 +163,12 @@ public:
     int width() const { return fWidth; }
     int height() const { return fHeight; }
     bool hasMipMaps() const { return GrMipMapped::kYes == fMipMapped; }
-    GrBackend backend() const {return fBackend; }
+    GrBackendApi backend() const {return fBackend; }
 
     // If the backend API is GL, copies a snapshot of the GrGLTextureInfo struct into the passed in
     // pointer and returns true. Otherwise returns false if the backend API is not GL.
     bool getGLTextureInfo(GrGLTextureInfo*) const;
 
-#ifdef SK_VULKAN
     // If the backend API is Vulkan, copies a snapshot of the GrVkImageInfo struct into the passed
     // in pointer and returns true. This snapshot will set the fImageLayout to the current layout
     // state. Otherwise returns false if the backend API is not Vulkan.
@@ -163,7 +177,15 @@ public:
     // Anytime the client changes the VkImageLayout of the VkImage captured by this
     // GrBackendTexture, they must call this function to notify Skia of the changed layout.
     void setVkImageLayout(VkImageLayout);
+
+#ifdef SK_METAL
+    // If the backend API is Metal, copies a snapshot of the GrMtlTextureInfo struct into the passed
+    // in pointer and returns true. Otherwise returns false if the backend API is not Metal.
+    bool getMtlTextureInfo(GrMtlTextureInfo*) const;
 #endif
+
+    // Get the GrBackendFormat for this texture (or an invalid format if this is not valid).
+    GrBackendFormat getBackendFormat() const;
 
     // If the backend API is Mock, copies a snapshot of the GrMockTextureInfo struct into the passed
     // in pointer and returns true. Otherwise returns false if the backend API is not Mock.
@@ -172,13 +194,13 @@ public:
     // Returns true if the backend texture has been initialized.
     bool isValid() const { return fIsValid; }
 
-    /**
-     * Create a GrBackendFormat object that matches this texture
-     */
-    GrBackendFormat format() const;
-
 #if GR_TEST_UTILS
-    GrPixelConfig testingOnly_getPixelConfig() const;
+    // We can remove the pixelConfig getter and setter once we remove the GrPixelConfig from the
+    // GrBackendTexture and plumb the GrPixelconfig manually throughout our code (or remove all use
+    // of GrPixelConfig in general).
+    GrPixelConfig pixelConfig() const { return fConfig; }
+    void setPixelConfig(GrPixelConfig config) { fConfig = config; }
+
     static bool TestingOnly_Equals(const GrBackendTexture& , const GrBackendTexture&);
 #endif
 
@@ -186,21 +208,26 @@ private:
     // Friending for access to the GrPixelConfig
     friend class SkImage;
     friend class SkImage_Gpu;
+    friend class SkImage_GpuBase;
+    friend class SkImage_GpuYUVA;
+    friend class SkPromiseImageHelper;
     friend class SkSurface;
+    friend class GrAHardwareBufferImageGenerator;
     friend class GrBackendTextureImageGenerator;
     friend class GrProxyProvider;
     friend class GrGpu;
     friend class GrGLGpu;
     friend class GrVkGpu;
+    friend class GrMtlGpu;
     friend class PromiseImageHelper;
 
     GrPixelConfig config() const { return fConfig; }
 
-#ifdef SK_VULKAN
    // Requires friending of GrVkGpu (done above already)
    sk_sp<GrVkImageLayout> getGrVkImageLayout() const;
 
    friend class GrVkTexture;
+#ifdef SK_VULKAN
    GrBackendTexture(int width,
                     int height,
                     const GrVkImageInfo& vkInfo,
@@ -215,12 +242,13 @@ private:
     int fHeight;        //<! height in pixels
     GrPixelConfig fConfig;
     GrMipMapped fMipMapped;
-    GrBackend fBackend;
+    GrBackendApi fBackend;
 
     union {
         GrGLTextureInfo fGLInfo;
-#ifdef SK_VULKAN
         GrVkBackendSurfaceInfo fVkInfo;
+#ifdef SK_METAL
+        GrMtlTextureInfo fMtlInfo;
 #endif
         GrMockTextureInfo fMockInfo;
     };
@@ -231,17 +259,6 @@ public:
     // Creates an invalid backend texture.
     GrBackendRenderTarget() : fIsValid(false) {}
 
-#if GR_TEST_UTILS
-    // GrGLTextureInfo::fFormat is ignored
-    // Deprecated: Should use version that does not take a GrPixelConfig instead
-    GrBackendRenderTarget(int width,
-                          int height,
-                          int sampleCnt,
-                          int stencilBits,
-                          GrPixelConfig config,
-                          const GrGLFramebufferInfo& glInfo);
-#endif
-
     // The GrGLTextureInfo must have a valid fFormat.
     GrBackendRenderTarget(int width,
                           int height,
@@ -249,7 +266,6 @@ public:
                           int stencilBits,
                           const GrGLFramebufferInfo& glInfo);
 
-#ifdef SK_VULKAN
     /** Deprecated, use version that does not take stencil bits. */
     GrBackendRenderTarget(int width,
                           int height,
@@ -257,6 +273,12 @@ public:
                           int stencilBits,
                           const GrVkImageInfo& vkInfo);
     GrBackendRenderTarget(int width, int height, int sampleCnt, const GrVkImageInfo& vkInfo);
+
+#ifdef SK_METAL
+    GrBackendRenderTarget(int width,
+                          int height,
+                          int sampleCnt,
+                          const GrMtlTextureInfo& mtlInfo);
 #endif
 
     GrBackendRenderTarget(int width,
@@ -274,13 +296,12 @@ public:
     int height() const { return fHeight; }
     int sampleCnt() const { return fSampleCnt; }
     int stencilBits() const { return fStencilBits; }
-    GrBackend backend() const {return fBackend; }
+    GrBackendApi backend() const {return fBackend; }
 
     // If the backend API is GL, copies a snapshot of the GrGLFramebufferInfo struct into the passed
     // in pointer and returns true. Otherwise returns false if the backend API is not GL.
     bool getGLFramebufferInfo(GrGLFramebufferInfo*) const;
 
-#ifdef SK_VULKAN
     // If the backend API is Vulkan, copies a snapshot of the GrVkImageInfo struct into the passed
     // in pointer and returns true. This snapshot will set the fImageLayout to the current layout
     // state. Otherwise returns false if the backend API is not Vulkan.
@@ -289,6 +310,11 @@ public:
     // Anytime the client changes the VkImageLayout of the VkImage captured by this
     // GrBackendRenderTarget, they must call this function to notify Skia of the changed layout.
     void setVkImageLayout(VkImageLayout);
+
+#ifdef SK_METAL
+    // If the backend API is Metal, copies a snapshot of the GrMtlTextureInfo struct into the passed
+    // in pointer and returns true. Otherwise returns false if the backend API is not Metal.
+    bool getMtlTextureInfo(GrMtlTextureInfo*) const;
 #endif
 
     // If the backend API is Mock, copies a snapshot of the GrMockTextureInfo struct into the passed
@@ -300,7 +326,12 @@ public:
 
 
 #if GR_TEST_UTILS
-    GrPixelConfig testingOnly_getPixelConfig() const;
+    // We can remove the pixelConfig getter and setter once we remove the pixel config from the
+    // GrBackendRenderTarget and plumb the pixel config manually throughout our code (or remove all
+    // use of GrPixelConfig in general).
+    GrPixelConfig pixelConfig() const { return fConfig; }
+    void setPixelConfig(GrPixelConfig config) { fConfig = config; }
+
     static bool TestingOnly_Equals(const GrBackendRenderTarget&, const GrBackendRenderTarget&);
 #endif
 
@@ -313,16 +344,15 @@ private:
     friend class GrGLGpu;
     friend class GrProxyProvider;
     friend class GrVkGpu;
+    friend class GrMtlGpu;
     GrPixelConfig config() const { return fConfig; }
 
-#ifdef SK_VULKAN
    // Requires friending of GrVkGpu (done above already)
    sk_sp<GrVkImageLayout> getGrVkImageLayout() const;
 
    friend class GrVkRenderTarget;
    GrBackendRenderTarget(int width, int height, int sampleCnt, const GrVkImageInfo& vkInfo,
                          sk_sp<GrVkImageLayout> layout);
-#endif
 
     // Free and release and resources being held by the GrBackendTexture.
     void cleanup();
@@ -335,12 +365,13 @@ private:
     int fStencilBits;
     GrPixelConfig fConfig;
 
-    GrBackend fBackend;
+    GrBackendApi fBackend;
 
     union {
         GrGLFramebufferInfo fGLInfo;
-#ifdef SK_VULKAN
         GrVkBackendSurfaceInfo fVkInfo;
+#ifdef SK_METAL
+        GrMtlTextureInfo fMtlInfo;
 #endif
         GrMockRenderTargetInfo fMockInfo;
     };

@@ -10,6 +10,7 @@
 #define SKDEBUGCANVAS_H_
 
 #include "SkCanvas.h"
+#include "SkCanvasVirtualEnforcer.h"
 #include "SkDrawCommand.h"
 #include "SkPath.h"
 #include "SkPathOps.h"
@@ -22,7 +23,7 @@ class GrAuditTrail;
 class SkNWayCanvas;
 class SkPicture;
 
-class SkDebugCanvas : public SkCanvas {
+class SkDebugCanvas : public SkCanvasVirtualEnforcer<SkCanvas> {
 public:
     SkDebugCanvas(int width, int height);
 
@@ -102,9 +103,9 @@ public:
         SkDebugCanvas::getSize(). The encoder may use the UrlDataManager to store binary data such
         as images, referring to them via URLs embedded in the JSON.
      */
-    Json::Value toJSON(UrlDataManager &urlDataManager, int n, SkCanvas *);
+    void toJSON(SkJSONWriter& writer, UrlDataManager &urlDataManager, int n, SkCanvas *);
 
-    Json::Value toJSONOpList(int n, SkCanvas*);
+    void toJSONOpList(SkJSONWriter& writer, int n, SkCanvas*);
 
     void detachCommands(SkTDArray<SkDrawCommand*>* dst) {
         fCommandVector.swap(*dst);
@@ -112,9 +113,8 @@ public:
 
 protected:
     void willSave() override;
-
     SaveLayerStrategy getSaveLayerStrategy(const SaveLayerRec &) override;
-
+    bool onDoSaveBehind(const SkRect*) override;
     void willRestore() override;
 
     void didConcat(const SkMatrix &) override;
@@ -123,16 +123,6 @@ protected:
 
     void onDrawAnnotation(const SkRect&, const char[], SkData*) override;
     void onDrawDRRect(const SkRRect&, const SkRRect&, const SkPaint&) override;
-    void onDrawText(const void* text, size_t byteLength, SkScalar x, SkScalar y,
-                    const SkPaint&) override;
-    void onDrawPosText(const void* text, size_t byteLength, const SkPoint pos[],
-                       const SkPaint&) override;
-    void onDrawPosTextH(const void* text, size_t byteLength, const SkScalar xpos[],
-                        SkScalar constY, const SkPaint&) override;
-    void onDrawTextOnPath(const void* text, size_t byteLength, const SkPath& path,
-                          const SkMatrix* matrix, const SkPaint&) override;
-    void onDrawTextRSXform(const void* text, size_t byteLength, const SkRSXform[], const SkRect*,
-                           const SkPaint&) override;
     void onDrawTextBlob(const SkTextBlob* blob, SkScalar x, SkScalar y,
                         const SkPaint& paint) override;
 
@@ -141,14 +131,18 @@ protected:
     void onDrawPaint(const SkPaint&) override;
 
     void onDrawRect(const SkRect&, const SkPaint&) override;
+    void onDrawEdgeAARect(const SkRect&, SkCanvas::QuadAAFlags, SkColor, SkBlendMode) override;
     void onDrawOval(const SkRect&, const SkPaint&) override;
     void onDrawArc(const SkRect&, SkScalar, SkScalar, bool, const SkPaint&) override;
     void onDrawRRect(const SkRRect&, const SkPaint&) override;
     void onDrawPoints(PointMode, size_t count, const SkPoint pts[], const SkPaint&) override;
-    void onDrawVerticesObject(const SkVertices*, SkBlendMode, const SkPaint&) override;
+    void onDrawVerticesObject(const SkVertices*, const SkVertices::Bone bones[], int boneCount,
+                              SkBlendMode, const SkPaint&) override;
     void onDrawPath(const SkPath&, const SkPaint&) override;
     void onDrawRegion(const SkRegion&, const SkPaint&) override;
     void onDrawBitmap(const SkBitmap&, SkScalar left, SkScalar top, const SkPaint*) override;
+    void onDrawBitmapLattice(const SkBitmap&, const Lattice&, const SkRect&,
+                             const SkPaint*) override;
     void onDrawBitmapRect(const SkBitmap&, const SkRect* src, const SkRect& dst, const SkPaint*,
                           SrcRectConstraint) override;
     void onDrawImage(const SkImage*, SkScalar left, SkScalar top, const SkPaint*) override;
@@ -156,16 +150,20 @@ protected:
                             const SkRect& dst, const SkPaint* paint) override;
     void onDrawImageRect(const SkImage*, const SkRect* src, const SkRect& dst,
                          const SkPaint*, SrcRectConstraint) override;
+    void onDrawImageSet(const ImageSetEntry[], int count, SkFilterQuality, SkBlendMode) override;
     void onDrawBitmapNine(const SkBitmap&, const SkIRect& center, const SkRect& dst,
                           const SkPaint*) override;
     void onDrawImageNine(const SkImage*, const SkIRect& center, const SkRect& dst,
                          const SkPaint*) override;
+    void onDrawAtlas(const SkImage*, const SkRSXform[], const SkRect[], const SkColor[],
+                     int, SkBlendMode, const SkRect*, const SkPaint*) override;
     void onClipRect(const SkRect&, SkClipOp, ClipEdgeStyle) override;
     void onClipRRect(const SkRRect&, SkClipOp, ClipEdgeStyle) override;
     void onClipPath(const SkPath&, SkClipOp, ClipEdgeStyle) override;
     void onClipRegion(const SkRegion& region, SkClipOp) override;
     void onDrawShadowRec(const SkPath&, const SkDrawShadowRec&) override;
 
+    void onDrawDrawable(SkDrawable*, const SkMatrix*) override;
     void onDrawPicture(const SkPicture*, const SkMatrix*, const SkPaint*) override;
 
 private:
@@ -188,7 +186,7 @@ private:
     void drawAndCollectOps(int n, SkCanvas*);
     void cleanupAuditTrail(SkCanvas*);
 
-    typedef SkCanvas INHERITED;
+    typedef SkCanvasVirtualEnforcer<SkCanvas> INHERITED;
 };
 
 #endif

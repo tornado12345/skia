@@ -54,6 +54,7 @@ struct GrMockOptions {
 
     // GrCaps options.
     bool fInstanceAttribSupport = false;
+    bool fHalfFloatVertexAttributeSupport = false;
     uint32_t fMapBufferFlags = 0;
     int fMaxTextureSize = 2048;
     int fMaxRenderTargetSize = 2048;
@@ -62,7 +63,6 @@ struct GrMockOptions {
 
     // GrShaderCaps options.
     bool fGeometryShaderSupport = false;
-    bool fTexelBufferSupport = false;
     bool fIntegerSupport = false;
     bool fFlatInterpolationSupport = false;
     int fMaxVertexSamplers = 0;

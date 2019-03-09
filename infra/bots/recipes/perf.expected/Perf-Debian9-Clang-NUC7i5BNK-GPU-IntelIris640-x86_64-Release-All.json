@@ -6,6 +6,21 @@
       "RECIPE_MODULE[recipe_engine::file]/resources/fileutil.py",
       "--json-output",
       "/path/to/tmp/json",
+      "ensure-directory",
+      "--mode",
+      "0777",
+      "[START_DIR]/tmp"
+    ],
+    "infra_step": true,
+    "name": "makedirs tmp_dir"
+  },
+  {
+    "cmd": [
+      "python",
+      "-u",
+      "RECIPE_MODULE[recipe_engine::file]/resources/fileutil.py",
+      "--json-output",
+      "/path/to/tmp/json",
       "copy",
       "[START_DIR]/skia/infra/bots/assets/skp/VERSION",
       "/path/to/tmp/"
@@ -91,10 +106,10 @@
       "--json-output",
       "/path/to/tmp/json",
       "rmtree",
-      "[START_DIR]/[SWARM_OUT_DIR]/perfdata/Perf-Debian9-Clang-NUC7i5BNK-GPU-IntelIris640-x86_64-Release-All/data"
+      "[START_DIR]/[SWARM_OUT_DIR]"
     ],
     "infra_step": true,
-    "name": "rmtree data"
+    "name": "rmtree [SWARM_OUT_DIR]"
   },
   {
     "cmd": [
@@ -106,10 +121,10 @@
       "ensure-directory",
       "--mode",
       "0777",
-      "[START_DIR]/[SWARM_OUT_DIR]/perfdata/Perf-Debian9-Clang-NUC7i5BNK-GPU-IntelIris640-x86_64-Release-All/data"
+      "[START_DIR]/[SWARM_OUT_DIR]"
     ],
     "infra_step": true,
-    "name": "makedirs data"
+    "name": "makedirs [SWARM_OUT_DIR]"
   },
   {
     "cmd": [
@@ -146,7 +161,7 @@
       "RECIPE_MODULE[skia::flavor]/resources/symbolize_stack_trace.py",
       "[START_DIR]",
       "catchsegv",
-      "[START_DIR]/build/out/Release/nanobench",
+      "[START_DIR]/build/nanobench",
       "-i",
       "[START_DIR]/skia/resources",
       "--skps",
@@ -167,6 +182,8 @@
       "gl",
       "glsrgb",
       "gles",
+      "glessrgb",
+      "--reduceOpListSplitting",
       "--match",
       "~inc0.gif",
       "~inc1.gif",
@@ -189,7 +206,7 @@
       "~inc1.webp",
       "--verbose",
       "--outResultsFile",
-      "[START_DIR]/[SWARM_OUT_DIR]/perfdata/Perf-Debian9-Clang-NUC7i5BNK-GPU-IntelIris640-x86_64-Release-All/data/nanobench_abc123_1337000001.json",
+      "[START_DIR]/[SWARM_OUT_DIR]/nanobench_abc123_1337000001.json",
       "--properties",
       "gitHash",
       "abc123",
@@ -213,13 +230,11 @@
     ],
     "cwd": "[START_DIR]/skia",
     "env": {
-      "BUILDTYPE": "Release",
       "CHROME_HEADLESS": "1",
-      "LD_LIBRARY_PATH": "[START_DIR]/linux_vulkan_intel_driver_release",
-      "LIBGL_DRIVERS_PATH": "[START_DIR]/linux_vulkan_intel_driver_release",
-      "PATH": "<PATH>:RECIPE_PACKAGE_REPO[depot_tools]",
-      "SKIA_OUT": "[START_DIR]/build/out",
-      "VK_ICD_FILENAMES": "[START_DIR]/linux_vulkan_intel_driver_release/intel_icd.x86_64.json"
+      "LD_LIBRARY_PATH": "[START_DIR]/mesa_intel_driver_linux",
+      "LIBGL_DRIVERS_PATH": "[START_DIR]/mesa_intel_driver_linux",
+      "PATH": "<PATH>:RECIPE_REPO[depot_tools]",
+      "VK_ICD_FILENAMES": "[START_DIR]/mesa_intel_driver_linux/intel_icd.x86_64.json"
     },
     "name": "symbolized nanobench"
   },
@@ -233,14 +248,13 @@
       "ensure-directory",
       "--mode",
       "0777",
-      "[START_DIR]/[SWARM_OUT_DIR]/perfdata/Perf-Debian9-Clang-NUC7i5BNK-GPU-IntelIris640-x86_64-Release-All"
+      "[START_DIR]/[SWARM_OUT_DIR]"
     ],
     "infra_step": true,
     "name": "makedirs perf_dir"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "jsonResult": null,
+    "name": "$result"
   }
 ]

@@ -35,6 +35,7 @@ struct Expression : public IRNode {
         kFunctionReference_Kind,
         kFunctionCall_Kind,
         kIndex_Kind,
+        kNullLiteral_Kind,
         kPrefix_Kind,
         kPostfix_Kind,
         kSetting_Kind,
@@ -105,6 +106,8 @@ struct Expression : public IRNode {
     virtual int coercionCost(const Type& target) const {
         return fType.coercionCost(target);
     }
+
+    virtual std::unique_ptr<Expression> clone() const = 0;
 
     const Kind fKind;
     const Type& fType;

@@ -50,7 +50,7 @@
     "cwd": "[START_DIR]/cache/work",
     "env_prefixes": {
       "PATH": [
-        "RECIPE_PACKAGE_REPO[depot_tools]"
+        "RECIPE_REPO[depot_tools]"
       ]
     },
     "infra_step": true,
@@ -95,54 +95,6 @@
   },
   {
     "cmd": [
-      "[START_DIR]/go/go/bin/go",
-      "version"
-    ],
-    "env": {
-      "BUILDTYPE": "Release",
-      "CHROME_HEADLESS": "1",
-      "GOPATH": "[START_DIR]/gopath",
-      "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]",
-      "SKIA_OUT": "[START_DIR]/build/out"
-    },
-    "name": "go version"
-  },
-  {
-    "cmd": [
-      "go",
-      "version"
-    ],
-    "env": {
-      "BUILDTYPE": "Release",
-      "CHROME_HEADLESS": "1",
-      "GOPATH": "[START_DIR]/gopath",
-      "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]",
-      "SKIA_OUT": "[START_DIR]/build/out"
-    },
-    "name": "env go version"
-  },
-  {
-    "cmd": [
-      "[START_DIR]/go/go/bin/go",
-      "get",
-      "-u",
-      "-t",
-      "go.skia.org/infra/..."
-    ],
-    "env": {
-      "BUILDTYPE": "Release",
-      "CHROME_HEADLESS": "1",
-      "GOPATH": "[START_DIR]/gopath",
-      "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>:RECIPE_PACKAGE_REPO[depot_tools]",
-      "SKIA_OUT": "[START_DIR]/build/out"
-    },
-    "name": "update go pkgs"
-  },
-  {
-    "cmd": [
       "make",
       "-C",
       "infra/bots",
@@ -150,15 +102,15 @@
     ],
     "cwd": "[START_DIR]/cache/work/skia",
     "env": {
-      "GOPATH": "[START_DIR]/gopath",
+      "GOCACHE": "[START_DIR]/cache/go_cache",
+      "GOPATH": "[START_DIR]/go_deps",
       "GOROOT": "[START_DIR]/go/go",
-      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/gopath:<PATH>"
+      "PATH": "[START_DIR]/go/go/bin:[START_DIR]/go_deps/bin:<PATH>"
     },
     "name": "infra_tests"
   },
   {
-    "name": "$result",
-    "recipe_result": null,
-    "status_code": 0
+    "jsonResult": null,
+    "name": "$result"
   }
 ]

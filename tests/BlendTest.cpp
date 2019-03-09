@@ -19,7 +19,6 @@
 #include "SkTypes.h"
 #include "Test.h"
 
-#if SK_SUPPORT_GPU
 #include "GrBackendSurface.h"
 #include "GrContext.h"
 #include "GrContextFactory.h"
@@ -27,7 +26,6 @@
 #include "GrResourceProvider.h"
 #include "GrTexture.h"
 #include "GrTypes.h"
-#endif
 
 #include <vector>
 
@@ -87,7 +85,6 @@ DEF_TEST(Blend_byte_multiply, r) {
     for (auto multiply : perfect) { REPORTER_ASSERT(r, test(multiply).diffs == 0); }
 }
 
-#if SK_SUPPORT_GPU
 namespace {
 static sk_sp<SkSurface> create_gpu_surface_backend_texture_as_render_target(
         GrContext* context, int sampleCnt, int width, int height, SkColorType colorType,
@@ -100,7 +97,7 @@ static sk_sp<SkSurface> create_gpu_surface_backend_texture_as_render_target(
     backingDesc.fConfig = config;
     backingDesc.fSampleCnt = sampleCnt;
 
-    auto resourceProvider = context->contextPriv().resourceProvider();
+    auto resourceProvider = context->priv().resourceProvider();
 
     *backingSurface = resourceProvider->createTexture(backingDesc, SkBudgeted::kNo);
     if (!(*backingSurface)) {
@@ -206,4 +203,3 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(ES2BlendWithNoTexture, reporter, ctxInfo) 
         backingSurface.reset();
     }
 }
-#endif

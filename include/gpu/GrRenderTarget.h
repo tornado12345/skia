@@ -99,14 +99,6 @@ public:
     };
     virtual ResolveType getResolveType() const = 0;
 
-#ifdef SK_SUPPORT_LEGACY_BACKEND_OBJECTS
-    /**
-     *  Return the native ID or handle to the rendertarget, depending on the
-     *  platform. e.g. on OpenGL, return the FBO ID.
-     */
-    virtual GrBackendObject getRenderTargetHandle() const = 0;
-#endif
-
     virtual GrBackendRenderTarget getBackendRenderTarget() const = 0;
 
     // Checked when this object is asked to attach a stencil buffer.
@@ -118,6 +110,7 @@ public:
 
 protected:
     GrRenderTarget(GrGpu*, const GrSurfaceDesc&, GrStencilAttachment* = nullptr);
+    ~GrRenderTarget() override;
 
     // override of GrResource
     void onAbandon() override;
@@ -132,10 +125,10 @@ private:
 
     friend class GrRenderTargetPriv;
 
-    int                  fSampleCnt;
-    GrStencilAttachment* fStencilAttachment;
-
-    SkIRect              fResolveRect;
+    int fSampleCnt;
+    int fSamplePatternKey;
+    sk_sp<GrStencilAttachment> fStencilAttachment;
+    SkIRect fResolveRect;
 
     typedef GrSurface INHERITED;
 };

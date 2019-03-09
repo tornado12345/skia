@@ -69,7 +69,7 @@ public:
     : INHERITED(program, errors, out)
     , fContext(*context)
     , fDefaultLayout(MemoryLayout::k140_Standard)
-    , fCapabilities(1 << SpvCapabilityShader)
+    , fCapabilities(0)
     , fIdCount(1)
     , fBoolTrue(0)
     , fBoolFalse(0)
@@ -95,8 +95,9 @@ private:
         kMin_SpecialIntrinsic,
         kMix_SpecialIntrinsic,
         kMod_SpecialIntrinsic,
+        kDFdy_SpecialIntrinsic,
+        kSaturate_SpecialIntrinsic,
         kSubpassLoad_SpecialIntrinsic,
-        kTexelFetch_SpecialIntrinsic,
         kTexture_SpecialIntrinsic,
     };
 
@@ -119,7 +120,7 @@ private:
     SpvId getPointerType(const Type& type, const MemoryLayout& layout,
                          SpvStorageClass_ storageClass);
 
-    void writePrecisionModifier(const Modifiers& modifiers, SpvId id);
+    void writePrecisionModifier(const Type& type, SpvId id);
 
     std::vector<SpvId> getAccessChain(const Expression& expr, OutputStream& out);
 
@@ -212,7 +213,12 @@ private:
     SpvId foldToBool(SpvId id, const Type& operandType, SpvOp op, OutputStream& out);
 
     SpvId writeMatrixComparison(const Type& operandType, SpvId lhs, SpvId rhs, SpvOp_ floatOperator,
-                                SpvOp_ intOperator, OutputStream& out);
+                                SpvOp_ intOperator, SpvOp_ vectorMergeOperator,
+                                SpvOp_ mergeOperator, OutputStream& out);
+
+    SpvId writeComponentwiseMatrixBinary(const Type& operandType, SpvId lhs, SpvId rhs,
+                                         SpvOp_ floatOperator, SpvOp_ intOperator,
+                                         OutputStream& out);
 
     SpvId writeBinaryOperation(const Type& resultType, const Type& operandType, SpvId lhs,
                                SpvId rhs, SpvOp_ ifFloat, SpvOp_ ifInt, SpvOp_ ifUInt,
@@ -331,6 +337,8 @@ private:
     std::unordered_map<uint64_t, SpvId> fUIntConstants;
     std::unordered_map<float, SpvId> fFloatConstants;
     std::unordered_map<double, SpvId> fDoubleConstants;
+    // The constant float2(0, 1), used in swizzling
+    SpvId fConstantZeroOneVector = 0;
     bool fSetupFragPosition;
     // label of the current block, or 0 if we are not in a block
     SpvId fCurrentBlock;

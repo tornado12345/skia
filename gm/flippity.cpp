@@ -10,8 +10,6 @@
 
 #include "SkSurface.h"
 
-#if SK_SUPPORT_GPU
-
 #include "GrContextPriv.h"
 #include "ProxyUtils.h"
 #include "SkImage_Gpu.h"
@@ -61,13 +59,16 @@ static const SkMatrix kUVMatrices[kNumMatrices] = {
 // Create a fixed size text label like "LL" or "LR".
 static sk_sp<SkImage> make_text_image(GrContext* context, const char* text, SkColor color) {
     SkPaint paint;
-    sk_tool_utils::set_portable_typeface(&paint);
     paint.setAntiAlias(true);
-    paint.setTextSize(32);
     paint.setColor(color);
 
+    SkFont font;
+    font.setEdging(SkFont::Edging::kAntiAlias);
+    font.setTypeface(sk_tool_utils::create_portable_typeface());
+    font.setSize(32);
+
     SkRect bounds;
-    paint.measureText(text, strlen(text), &bounds);
+    font.measureText(text, strlen(text), kUTF8_SkTextEncoding, &bounds);
     const SkMatrix mat = SkMatrix::MakeRectToRect(bounds, SkRect::MakeWH(kLabelSize, kLabelSize),
                                                   SkMatrix::kFill_ScaleToFit);
 
@@ -78,7 +79,7 @@ static sk_sp<SkImage> make_text_image(GrContext* context, const char* text, SkCo
 
     canvas->clear(SK_ColorWHITE);
     canvas->concat(mat);
-    canvas->drawText(text, strlen(text), 0, 0, paint);
+    canvas->drawSimpleText(text, strlen(text), kUTF8_SkTextEncoding, 0, 0, font, paint);
 
     sk_sp<SkImage> image = surf->makeImageSnapshot();
 
@@ -114,8 +115,8 @@ static sk_sp<SkImage> make_reference_image(GrContext* context,
         return nullptr;
     }
 
-    return sk_make_sp<SkImage_Gpu>(context, kNeedNewImageUniqueID, kOpaque_SkAlphaType,
-                                   std::move(proxy), nullptr, SkBudgeted::kYes);
+    return sk_make_sp<SkImage_Gpu>(sk_ref_sp(context), kNeedNewImageUniqueID, kOpaque_SkAlphaType,
+                                   std::move(proxy), nullptr);
 }
 
 // Here we're converting from a matrix that is intended for UVs to a matrix that is intended
@@ -138,10 +139,10 @@ static bool UVMatToGeomMatForImage(SkMatrix* geomMat, const SkMatrix& uvMat) {
 
 // This GM exercises drawImage with a set of matrices that use an unusual amount of flips and
 // rotates.
-class FlippityGM : public skiagm::GM {
+class FlippityGM : public skiagm::GpuGM {
 public:
     FlippityGM() {
-        this->setBGColor(sk_tool_utils::color_to_565(0xFFCCCCCC));
+        this->setBGColor(0xFFCCCCCC);
     }
 
 protected:
@@ -224,13 +225,7 @@ protected:
         SkASSERT(kNumLabels == fLabels.count());
     }
 
-    void onDraw(SkCanvas* canvas) override {
-        GrContext* context = canvas->getGrContext();
-        if (!context) {
-            skiagm::GM::DrawGpuOnlyMessage(canvas);
-            return;
-        }
-
+    void onDraw(GrContext* context, GrRenderTargetContext*, SkCanvas* canvas) override {
         this->makeLabels(context);
 
         canvas->save();
@@ -271,5 +266,3 @@ private:
 };
 
 DEF_GM(return new FlippityGM;)
-
-#endif

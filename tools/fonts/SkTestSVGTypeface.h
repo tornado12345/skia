@@ -9,12 +9,14 @@
 #define SkTestSVGTypeface_DEFINED
 
 #include "SkFontArguments.h"
+#include "SkFontMetrics.h"
 #include "SkMutex.h"
 #include "SkPaint.h"
 #include "SkPoint.h"
 #include "SkRect.h"
 #include "SkRefCnt.h"
 #include "SkScalar.h"
+#include "SkStream.h"
 #include "SkString.h"
 #include "SkTArray.h"
 #include "SkTHash.h"
@@ -29,7 +31,6 @@ class SkFontStyle;
 class SkGlyph;
 class SkPath;
 class SkScalerContext;
-class SkStreamAsset;
 class SkSVGDOM;
 class SkWStream;
 struct SkAdvancedTypefaceMetrics;
@@ -47,12 +48,12 @@ class SkTestSVGTypeface : public SkTypeface {
 public:
     SkTestSVGTypeface(const char* name,
                       int upem,
-                      const SkPaint::FontMetrics& metrics,
+                      const SkFontMetrics& metrics,
                       const SkSVGTestTypefaceGlyphData* data, int dataCount,
                       const SkFontStyle& style);
     ~SkTestSVGTypeface() override;
     void getAdvance(SkGlyph* glyph) const;
-    void getFontMetrics(SkPaint::FontMetrics* metrics) const;
+    void getFontMetrics(SkFontMetrics* metrics) const;
 
     static sk_sp<SkTestSVGTypeface> Default();
     void exportTtxCbdt(SkWStream*) const;
@@ -77,10 +78,15 @@ protected:
     SkScalerContext* onCreateScalerContext(const SkScalerContextEffects&,
                                            const SkDescriptor* desc) const override;
     void onFilterRec(SkScalerContextRec* rec) const override;
+    void getGlyphToUnicodeMap(SkUnichar*) const override;
     std::unique_ptr<SkAdvancedTypefaceMetrics> onGetAdvancedMetrics() const override;
 
-    SkStreamAsset* onOpenStream(int* ttcIndex) const override {
+    std::unique_ptr<SkStreamAsset> onOpenStream(int* ttcIndex) const override {
         return nullptr;
+    }
+
+    sk_sp<SkTypeface> onMakeClone(const SkFontArguments& args) const override {
+        return sk_ref_sp(this);
     }
 
     void onGetFontDescriptor(SkFontDescriptor* desc, bool* isLocal) const override;
@@ -105,6 +111,12 @@ protected:
         return 0;
     }
 
+    int onGetVariationDesignParameters(SkFontParameters::Variation::Axis parameters[],
+                                       int parameterCount) const override
+    {
+        return 0;
+    }
+
     int onGetTableTags(SkFontTableTag tags[]) const override {
         return 0;
     }
@@ -124,7 +136,7 @@ private:
     };
     SkString fName;
     int fUpem;
-    const SkPaint::FontMetrics fFontMetrics;
+    const SkFontMetrics fFontMetrics;
     std::unique_ptr<Glyph[]> fGlyphs;
     int fGlyphCount;
     SkTHashMap<SkUnichar, SkGlyphID> fCMap;

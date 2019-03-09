@@ -8,17 +8,17 @@
 #include "SkCanvasPriv.h"
 #include "SkDebugCanvas.h"
 #include "SkDrawCommand.h"
+#include "SkJSONWriter.h"
 #include "SkPaintFilterCanvas.h"
 #include "SkPicture.h"
 #include "SkRectPriv.h"
 #include "SkTextBlob.h"
 #include "SkClipOpPriv.h"
 
-#if SK_SUPPORT_GPU
 #include "GrAuditTrail.h"
 #include "GrContext.h"
+#include "GrContextPriv.h"
 #include "GrRenderTargetContext.h"
-#endif
 
 #define SKDEBUGCANVAS_VERSION                     1
 #define SKDEBUGCANVAS_ATTRIBUTE_VERSION           "version"
@@ -86,7 +86,7 @@ SkDebugCanvas::~SkDebugCanvas() {
 }
 
 void SkDebugCanvas::addDrawCommand(SkDrawCommand* command) {
-    fCommandVector.push(command);
+    fCommandVector.push_back(command);
 }
 
 void SkDebugCanvas::draw(SkCanvas* canvas) {
@@ -112,17 +112,14 @@ void SkDebugCanvas::drawTo(SkCanvas* originalCanvas, int index, int m) {
 
     DebugPaintFilterCanvas filterCanvas(originalCanvas, fOverdrawViz);
 
-#if SK_SUPPORT_GPU
     // If we have a GPU backend we can also visualize the op information
     GrAuditTrail* at = nullptr;
     if (fDrawGpuOpBounds || m != -1) {
         // The audit trail must be obtained from the original canvas.
         at = this->getAuditTrail(originalCanvas);
     }
-#endif
 
     for (int i = 0; i <= index; i++) {
-#if SK_SUPPORT_GPU
         // We need to flush any pending operations, or they might combine with commands below.
         // Previous operations were not registered with the audit trail when they were
         // created, so if we allow them to combine, the audit trail will fail to find them.
@@ -132,16 +129,13 @@ void SkDebugCanvas::drawTo(SkCanvas* originalCanvas, int index, int m) {
         if (at) {
             acb = new GrAuditTrail::AutoCollectOps(at, i);
         }
-#endif
 
         if (fCommandVector[i]->isVisible()) {
             fCommandVector[i]->execute(&filterCanvas);
         }
-#if SK_SUPPORT_GPU
         if (at && acb) {
             delete acb;
         }
-#endif
     }
 
     if (SkColorGetA(fClipVizColor) != 0) {
@@ -160,7 +154,6 @@ void SkDebugCanvas::drawTo(SkCanvas* originalCanvas, int index, int m) {
     fClip = filterCanvas.getDeviceClipBounds();
     filterCanvas.restoreToCount(saveCount);
 
-#if SK_SUPPORT_GPU
     // draw any ops if required and issue a full reset onto GrAuditTrail
     if (at) {
         // just in case there is global reordering, we flush the canvas before querying
@@ -208,7 +201,6 @@ void SkDebugCanvas::drawTo(SkCanvas* originalCanvas, int index, int m) {
             }
         }
     }
-#endif
     this->cleanupAuditTrail(originalCanvas);
 }
 
@@ -225,17 +217,14 @@ SkDrawCommand* SkDebugCanvas::getDrawCommandAt(int index) {
 
 GrAuditTrail* SkDebugCanvas::getAuditTrail(SkCanvas* canvas) {
     GrAuditTrail* at = nullptr;
-#if SK_SUPPORT_GPU
     GrContext* ctx = canvas->getGrContext();
     if (ctx) {
-        at = ctx->contextPriv().getAuditTrail();
+        at = ctx->priv().auditTrail();
     }
-#endif
     return at;
 }
 
 void SkDebugCanvas::drawAndCollectOps(int n, SkCanvas* canvas) {
-#if SK_SUPPORT_GPU
     GrAuditTrail* at = this->getAuditTrail(canvas);
     if (at) {
         // loop over all of the commands and draw them, this is to collect reordering
@@ -251,62 +240,52 @@ void SkDebugCanvas::drawAndCollectOps(int n, SkCanvas* canvas) {
             canvas->flush();
         }
     }
-#endif
 }
 
 void SkDebugCanvas::cleanupAuditTrail(SkCanvas* canvas) {
     GrAuditTrail* at = this->getAuditTrail(canvas);
     if (at) {
-#if SK_SUPPORT_GPU
         GrAuditTrail::AutoEnable ae(at);
         at->fullReset();
-#endif
     }
 }
 
-Json::Value SkDebugCanvas::toJSON(UrlDataManager& urlDataManager, int n, SkCanvas* canvas) {
+void SkDebugCanvas::toJSON(SkJSONWriter& writer, UrlDataManager& urlDataManager, int n,
+                           SkCanvas* canvas) {
     this->drawAndCollectOps(n, canvas);
 
     // now collect json
-#if SK_SUPPORT_GPU
     GrAuditTrail* at = this->getAuditTrail(canvas);
-#endif
-    Json::Value result = Json::Value(Json::objectValue);
-    result[SKDEBUGCANVAS_ATTRIBUTE_VERSION] = Json::Value(SKDEBUGCANVAS_VERSION);
-    Json::Value commands = Json::Value(Json::arrayValue);
-    for (int i = 0; i < this->getSize() && i <= n; i++) {
-        commands[i] = this->getDrawCommandAt(i)->toJSON(urlDataManager);
-#if SK_SUPPORT_GPU
-        if (at) {
-            // TODO if this is inefficient we could add a method to GrAuditTrail which takes
-            // a Json::Value and is only compiled in this file
-            Json::Value parsedFromString;
-            Json::Reader reader;
-            SkAssertResult(reader.parse(at->toJson(i).c_str(), parsedFromString));
+    writer.appendS32(SKDEBUGCANVAS_ATTRIBUTE_VERSION, SKDEBUGCANVAS_VERSION);
+    writer.beginArray(SKDEBUGCANVAS_ATTRIBUTE_COMMANDS);
 
-            commands[i][SKDEBUGCANVAS_ATTRIBUTE_AUDITTRAIL] = parsedFromString;
+    for (int i = 0; i < this->getSize() && i <= n; i++) {
+        writer.beginObject(); // command
+        this->getDrawCommandAt(i)->toJSON(writer, urlDataManager);
+
+        if (at) {
+            writer.appendName(SKDEBUGCANVAS_ATTRIBUTE_AUDITTRAIL);
+            at->toJson(writer, i);
         }
-#endif
+        writer.endObject(); // command
     }
+
+    writer.endArray(); // commands
     this->cleanupAuditTrail(canvas);
-    result[SKDEBUGCANVAS_ATTRIBUTE_COMMANDS] = commands;
-    return result;
 }
 
-Json::Value SkDebugCanvas::toJSONOpList(int n, SkCanvas* canvas) {
+void SkDebugCanvas::toJSONOpList(SkJSONWriter& writer, int n, SkCanvas* canvas) {
     this->drawAndCollectOps(n, canvas);
 
-    Json::Value parsedFromString;
-#if SK_SUPPORT_GPU
     GrAuditTrail* at = this->getAuditTrail(canvas);
     if (at) {
         GrAuditTrail::AutoManageOpList enable(at);
-        Json::Reader reader;
-        SkAssertResult(reader.parse(at->toJson().c_str(), parsedFromString));
+        at->toJson(writer);
+    } else {
+        writer.beginObject();
+        writer.endObject();
     }
-#endif
     this->cleanupAuditTrail(canvas);
-    return parsedFromString;
 }
 
 void SkDebugCanvas::setOverdrawViz(bool overdrawViz) {
@@ -343,6 +322,11 @@ void SkDebugCanvas::onDrawBitmap(const SkBitmap& bitmap, SkScalar left,
     this->addDrawCommand(new SkDrawBitmapCommand(bitmap, left, top, paint));
 }
 
+void SkDebugCanvas::onDrawBitmapLattice(const SkBitmap& bitmap, const Lattice& lattice,
+                                        const SkRect& dst, const SkPaint* paint) {
+    this->addDrawCommand(new SkDrawBitmapLatticeCommand(bitmap, lattice, dst, paint));
+}
+
 void SkDebugCanvas::onDrawBitmapRect(const SkBitmap& bitmap, const SkRect* src, const SkRect& dst,
                                      const SkPaint* paint, SrcRectConstraint constraint) {
     this->addDrawCommand(new SkDrawBitmapRectCommand(bitmap, src, dst, paint,
@@ -372,6 +356,11 @@ void SkDebugCanvas::onDrawImageRect(const SkImage* image, const SkRect* src, con
 void SkDebugCanvas::onDrawImageNine(const SkImage* image, const SkIRect& center,
                                     const SkRect& dst, const SkPaint* paint) {
     this->addDrawCommand(new SkDrawImageNineCommand(image, center, dst, paint));
+}
+
+void SkDebugCanvas::onDrawImageSet(const SkCanvas::ImageSetEntry set[], int count,
+                                   SkFilterQuality filterQuality, SkBlendMode mode) {
+    this->addDrawCommand(new SkDrawImageSetCommand(set, count, filterQuality, mode));
 }
 
 void SkDebugCanvas::onDrawOval(const SkRect& oval, const SkPaint& paint) {
@@ -409,20 +398,14 @@ void SkDebugCanvas::onDrawPoints(PointMode mode, size_t count,
     this->addDrawCommand(new SkDrawPointsCommand(mode, count, pts, paint));
 }
 
-void SkDebugCanvas::onDrawPosText(const void* text, size_t byteLength, const SkPoint pos[],
-                                  const SkPaint& paint) {
-    this->addDrawCommand(new SkDrawPosTextCommand(text, byteLength, pos, paint));
-}
-
-void SkDebugCanvas::onDrawPosTextH(const void* text, size_t byteLength, const SkScalar xpos[],
-                                   SkScalar constY, const SkPaint& paint) {
-    this->addDrawCommand(
-        new SkDrawPosTextHCommand(text, byteLength, xpos, constY, paint));
-}
-
 void SkDebugCanvas::onDrawRect(const SkRect& rect, const SkPaint& paint) {
     // NOTE(chudy): Messing up when renamed to DrawRect... Why?
     addDrawCommand(new SkDrawRectCommand(rect, paint));
+}
+
+void SkDebugCanvas::onDrawEdgeAARect(const SkRect& rect, SkCanvas::QuadAAFlags aa, SkColor color,
+                                     SkBlendMode mode) {
+    this->addDrawCommand(new SkDrawEdgeAARectCommand(rect, aa, color, mode));
 }
 
 void SkDebugCanvas::onDrawRRect(const SkRRect& rrect, const SkPaint& paint) {
@@ -432,22 +415,6 @@ void SkDebugCanvas::onDrawRRect(const SkRRect& rrect, const SkPaint& paint) {
 void SkDebugCanvas::onDrawDRRect(const SkRRect& outer, const SkRRect& inner,
                                  const SkPaint& paint) {
     this->addDrawCommand(new SkDrawDRRectCommand(outer, inner, paint));
-}
-
-void SkDebugCanvas::onDrawText(const void* text, size_t byteLength, SkScalar x, SkScalar y,
-                               const SkPaint& paint) {
-    this->addDrawCommand(new SkDrawTextCommand(text, byteLength, x, y, paint));
-}
-
-void SkDebugCanvas::onDrawTextOnPath(const void* text, size_t byteLength, const SkPath& path,
-                                     const SkMatrix* matrix, const SkPaint& paint) {
-    this->addDrawCommand(
-        new SkDrawTextOnPathCommand(text, byteLength, path, matrix, paint));
-}
-
-void SkDebugCanvas::onDrawTextRSXform(const void* text, size_t byteLength, const SkRSXform xform[],
-                                      const SkRect* cull, const SkPaint& paint) {
-    this->addDrawCommand(new SkDrawTextRSXformCommand(text, byteLength, xform, cull, paint));
 }
 
 void SkDebugCanvas::onDrawTextBlob(const SkTextBlob* blob, SkScalar x, SkScalar y,
@@ -462,14 +429,26 @@ void SkDebugCanvas::onDrawPatch(const SkPoint cubics[12], const SkColor colors[4
     this->addDrawCommand(new SkDrawPatchCommand(cubics, colors, texCoords, bmode, paint));
 }
 
-void SkDebugCanvas::onDrawVerticesObject(const SkVertices* vertices, SkBlendMode bmode,
-                                         const SkPaint& paint) {
+void SkDebugCanvas::onDrawVerticesObject(const SkVertices* vertices, const SkVertices::Bone bones[],
+                                         int boneCount, SkBlendMode bmode, const SkPaint& paint) {
+    // TODO: ANIMATION NOT LOGGED
     this->addDrawCommand(new SkDrawVerticesCommand(sk_ref_sp(const_cast<SkVertices*>(vertices)),
                                                    bmode, paint));
 }
 
+void SkDebugCanvas::onDrawAtlas(const SkImage* image, const SkRSXform xform[], const SkRect tex[],
+                                const SkColor colors[], int count, SkBlendMode bmode,
+                                const SkRect* cull, const SkPaint* paint) {
+    this->addDrawCommand(new SkDrawAtlasCommand(image, xform, tex, colors, count, bmode, cull,
+                                                paint));
+}
+
 void SkDebugCanvas::onDrawShadowRec(const SkPath& path, const SkDrawShadowRec& rec) {
     this->addDrawCommand(new SkDrawShadowCommand(path, rec));
+}
+
+void SkDebugCanvas::onDrawDrawable(SkDrawable* drawable, const SkMatrix* matrix) {
+    this->addDrawCommand(new SkDrawDrawableCommand(drawable, matrix));
 }
 
 void SkDebugCanvas::willRestore() {
@@ -487,6 +466,11 @@ SkCanvas::SaveLayerStrategy SkDebugCanvas::getSaveLayerStrategy(const SaveLayerR
     (void)this->INHERITED::getSaveLayerStrategy(rec);
     // No need for a full layer.
     return kNoLayer_SaveLayerStrategy;
+}
+
+bool SkDebugCanvas::onDoSaveBehind(const SkRect* subset) {
+    // TODO
+    return false;
 }
 
 void SkDebugCanvas::didSetMatrix(const SkMatrix& matrix) {

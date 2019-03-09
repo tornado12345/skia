@@ -13,8 +13,8 @@
 #include "SkClipStack.h"
 #include "SkTLList.h"
 
-class GrContext;
 class GrCoverageCountingPathRenderer;
+class GrRecordingContext;
 class GrRenderTargetContext;
 
 /**
@@ -26,7 +26,7 @@ public:
     using Element = SkClipStack::Element;
     using ElementList = SkTLList<SkClipStack::Element, 16>;
 
-    GrReducedClip(const SkClipStack&, const SkRect& queryBounds, const GrShaderCaps* caps,
+    GrReducedClip(const SkClipStack&, const SkRect& queryBounds, const GrCaps* caps,
                   int maxWindowRectangles = 0, int maxAnalyticFPs = 0, int maxCCPRClipPaths = 0);
 
     enum class InitialState : bool {
@@ -83,7 +83,7 @@ public:
     bool maskRequiresAA() const { SkASSERT(!fMaskElements.isEmpty()); return fMaskRequiresAA; }
 
     bool drawAlphaClipMask(GrRenderTargetContext*) const;
-    bool drawStencilClipMask(GrContext*, GrRenderTargetContext*) const;
+    bool drawStencilClipMask(GrRecordingContext*, GrRenderTargetContext*) const;
 
     int numAnalyticFPs() const { return fAnalyticFPs.count() + fCCPRClipPaths.count(); }
 
@@ -97,9 +97,8 @@ public:
      * may cause flushes or otherwise change which opList the actual draw is going into.
      */
     std::unique_ptr<GrFragmentProcessor> finishAndDetachAnalyticFPs(GrCoverageCountingPathRenderer*,
-                                                                    GrProxyProvider*,
-                                                                    uint32_t opListID,
-                                                                    int rtWidth, int rtHeight);
+                                                                    uint32_t opListID, int rtWidth,
+                                                                    int rtHeight);
 
 private:
     void walkStack(const SkClipStack&, const SkRect& queryBounds);
@@ -132,7 +131,7 @@ private:
 
     void makeEmpty();
 
-    const GrShaderCaps* fCaps;
+    const GrCaps* fCaps;
     const int fMaxWindowRectangles;
     const int fMaxAnalyticFPs;
     const int fMaxCCPRClipPaths;

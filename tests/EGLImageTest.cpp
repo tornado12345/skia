@@ -7,16 +7,15 @@
 
 #include "Test.h"
 #include "TestUtils.h"
-#if SK_SUPPORT_GPU
 #include "GrContext.h"
 #include "GrContextFactory.h"
 #include "GrContextPriv.h"
 #include "GrRenderTargetContext.h"
 #include "GrShaderCaps.h"
 #include "GrSurfacePriv.h"
-#include "GrTest.h"
 #include "GrTexture.h"
 #include "GrTextureContext.h"
+#include "GrTexturePriv.h"
 #include "GrTextureProxyPriv.h"
 #include "gl/GLTestContext.h"
 #include "gl/GrGLGpu.h"
@@ -31,7 +30,7 @@ static void cleanup(GLTestContext* glctx0, GrGLuint texID0, GLTestContext* glctx
         glctx1->makeCurrent();
         if (grctx1) {
             if (backendTex1 && backendTex1->isValid()) {
-                GrGLGpu* gpu1 = static_cast<GrGLGpu*>(grctx1->contextPriv().getGpu());
+                GrGLGpu* gpu1 = static_cast<GrGLGpu*>(grctx1->priv().getGpu());
                 gpu1->deleteTestingOnlyBackendTexture(*backendTex1);
             }
         }
@@ -56,7 +55,7 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(EGLImageTest, reporter, ctxInfo) {
     if (kGLES_GrGLStandard != glCtx0->gl()->fStandard) {
         return;
     }
-    GrGLGpu* gpu0 = static_cast<GrGLGpu*>(context0->contextPriv().getGpu());
+    GrGLGpu* gpu0 = static_cast<GrGLGpu*>(context0->priv().getGpu());
     if (!gpu0->glCaps().shaderCaps()->externalTextureSupport()) {
         return;
     }
@@ -86,10 +85,10 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(EGLImageTest, reporter, ctxInfo) {
 
     // Use GL Context 1 to create a texture unknown to GrContext.
     context1->flush();
-    GrGpu* gpu1 = context1->contextPriv().getGpu();
+    GrGpu* gpu1 = context1->priv().getGpu();
     static const int kSize = 100;
     backendTexture1 =
-        gpu1->createTestingOnlyBackendTexture(nullptr, kSize, kSize, kRGBA_8888_GrPixelConfig,
+        gpu1->createTestingOnlyBackendTexture(nullptr, kSize, kSize, GrColorType::kRGBA_8888,
                                               false, GrMipMapped::kNo);
 
     if (!backendTexture1.isValid() || !gpu1->isTestingOnlyBackendTexture(backendTexture1)) {
@@ -153,11 +152,12 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(EGLImageTest, reporter, ctxInfo) {
     }
 
     // Wrap this texture ID in a GrTexture
-    GrBackendTexture backendTex(kSize, kSize, kRGBA_8888_GrPixelConfig, externalTexture);
+    GrBackendTexture backendTex(kSize, kSize, GrMipMapped::kNo, externalTexture);
+    backendTex.setPixelConfig(kRGBA_8888_GrPixelConfig);
 
     // TODO: If I make this TopLeft origin to match resolve_origin calls for kDefault, this test
     // fails on the Nexus5. Why?
-    sk_sp<GrTextureContext> surfaceContext = context0->contextPriv().makeBackendTextureContext(
+    sk_sp<GrTextureContext> surfaceContext = context0->priv().makeBackendTextureContext(
             backendTex, kBottomLeft_GrSurfaceOrigin, nullptr);
 
     if (!surfaceContext) {
@@ -167,19 +167,19 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(EGLImageTest, reporter, ctxInfo) {
     }
 
     GrTextureProxy* proxy = surfaceContext->asTextureProxy();
-    REPORTER_ASSERT(reporter, proxy->texPriv().doesNotSupportMipMaps());
-    REPORTER_ASSERT(reporter, proxy->priv().peekTexture()->surfacePriv().doesNotSupportMipMaps());
+    REPORTER_ASSERT(reporter, proxy->mipMapped() == GrMipMapped::kNo);
+    REPORTER_ASSERT(reporter, proxy->peekTexture()->texturePriv().mipMapped() == GrMipMapped::kNo);
 
-    REPORTER_ASSERT(reporter, proxy->texPriv().isGLTextureRectangleOrExternal());
+    REPORTER_ASSERT(reporter, proxy->textureType() == GrTextureType::kExternal);
     REPORTER_ASSERT(reporter,
-                    proxy->priv().peekTexture()->surfacePriv().isGLTextureRectangleOrExternal());
-    REPORTER_ASSERT(reporter, proxy->texPriv().isClampOnly());
-    REPORTER_ASSERT(reporter, proxy->priv().peekTexture()->surfacePriv().isClampOnly());
+                    proxy->peekTexture()->texturePriv().textureType() == GrTextureType::kExternal);
+    REPORTER_ASSERT(reporter, proxy->hasRestrictedSampling());
+    REPORTER_ASSERT(reporter, proxy->peekTexture()->texturePriv().hasRestrictedSampling());
 
     // Should not be able to wrap as a RT
     {
         sk_sp<GrRenderTargetContext> temp =
-                context0->contextPriv().makeBackendTextureRenderTargetContext(
+                context0->priv().makeBackendTextureRenderTargetContext(
                         backendTex, kBottomLeft_GrSurfaceOrigin, 1, nullptr);
         if (temp) {
             ERRORF(reporter, "Should not be able to wrap an EXTERNAL texture as a RT.");
@@ -198,5 +198,3 @@ DEF_GPUTEST_FOR_GL_RENDERING_CONTEXTS(EGLImageTest, reporter, ctxInfo) {
 
     cleanup(glCtx0, externalTexture.fID, glCtx1.get(), context1, &backendTexture1, image);
 }
-
-#endif

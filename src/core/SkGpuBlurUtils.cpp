@@ -11,8 +11,9 @@
 
 #if SK_SUPPORT_GPU
 #include "GrCaps.h"
-#include "GrContext.h"
 #include "GrFixedClip.h"
+#include "GrRecordingContext.h"
+#include "GrRecordingContextPriv.h"
 #include "GrRenderTargetContext.h"
 #include "GrRenderTargetContextPriv.h"
 #include "effects/GrGaussianConvolutionFragmentProcessor.h"
@@ -81,8 +82,6 @@ static void convolve_gaussian_1d(GrRenderTargetContext* renderTargetContext,
                                  GrTextureDomain::Mode mode,
                                  int bounds[2]) {
     GrPaint paint;
-    paint.setGammaCorrect(renderTargetContext->colorSpaceInfo().isGammaCorrect());
-
     std::unique_ptr<GrFragmentProcessor> conv(GrGaussianConvolutionFragmentProcessor::Make(
             std::move(proxy), direction, radius, sigma, mode, bounds));
     paint.addColorFragmentProcessor(std::move(conv));
@@ -93,16 +92,8 @@ static void convolve_gaussian_1d(GrRenderTargetContext* renderTargetContext,
                                                  SkRect::Make(dstRect), localMatrix);
 }
 
-static GrPixelConfig get_blur_config(GrTextureProxy* proxy, SkColorSpace* cs) {
+static GrPixelConfig get_blur_config(GrTextureProxy* proxy) {
     GrPixelConfig config = proxy->config();
-
-    if (GrPixelConfigIsSRGB(config) && !cs) {
-        // If the context doesn't have sRGB write control, and we make an sRGB RTC, we won't be
-        // able to suppress the linear -> sRGB conversion out of the shader. Not all GL drivers
-        // have that feature, and Vulkan is missing it entirely. To keep things simple, switch to
-        // a non-sRGB destination, to ensure correct blurring behavior.
-        config = kRGBA_8888_GrPixelConfig;
-    }
 
     SkASSERT(kBGRA_8888_GrPixelConfig == config || kRGBA_8888_GrPixelConfig == config ||
              kRGB_888_GrPixelConfig == config || kRGBA_4444_GrPixelConfig == config ||
@@ -113,7 +104,7 @@ static GrPixelConfig get_blur_config(GrTextureProxy* proxy, SkColorSpace* cs) {
     return config;
 }
 
-static sk_sp<GrRenderTargetContext> convolve_gaussian_2d(GrContext* context,
+static sk_sp<GrRenderTargetContext> convolve_gaussian_2d(GrRecordingContext* context,
                                                          sk_sp<GrTextureProxy> proxy,
                                                          const SkIRect& srcBounds,
                                                          const SkIPoint& srcOffset,
@@ -125,12 +116,20 @@ static sk_sp<GrRenderTargetContext> convolve_gaussian_2d(GrContext* context,
                                                          const SkImageInfo& dstII,
                                                          SkBackingFit dstFit) {
 
-    GrPixelConfig config = get_blur_config(proxy.get(), dstII.colorSpace());
+    GrPixelConfig config = get_blur_config(proxy.get());
+
+    GrBackendFormat format = proxy->backendFormat().makeTexture2D();
+    if (!format.isValid()) {
+        return nullptr;
+    }
 
     sk_sp<GrRenderTargetContext> renderTargetContext;
-    renderTargetContext = context->contextPriv().makeDeferredRenderTargetContext(
+    renderTargetContext = context->priv().makeDeferredRenderTargetContext(
+                                                         format,
                                                          dstFit, dstII.width(), dstII.height(),
-                                                         config, dstII.refColorSpace());
+                                                         config, dstII.refColorSpace(),
+                                                         1, GrMipMapped::kNo,
+                                                         proxy->origin());
     if (!renderTargetContext) {
         return nullptr;
     }
@@ -140,8 +139,6 @@ static sk_sp<GrRenderTargetContext> convolve_gaussian_2d(GrContext* context,
     SkISize size = SkISize::Make(2 * radiusX + 1,  2 * radiusY + 1);
     SkIPoint kernelOffset = SkIPoint::Make(radiusX, radiusY);
     GrPaint paint;
-    paint.setGammaCorrect(renderTargetContext->colorSpaceInfo().isGammaCorrect());
-
     auto conv = GrMatrixConvolutionEffect::MakeGaussian(std::move(proxy), srcBounds, size, 1.0, 0.0,
                                                         kernelOffset, mode, true, sigmaX, sigmaY);
     paint.addColorFragmentProcessor(std::move(conv));
@@ -154,7 +151,7 @@ static sk_sp<GrRenderTargetContext> convolve_gaussian_2d(GrContext* context,
     return renderTargetContext;
 }
 
-static sk_sp<GrRenderTargetContext> convolve_gaussian(GrContext* context,
+static sk_sp<GrRenderTargetContext> convolve_gaussian(GrRecordingContext* context,
                                                       sk_sp<GrTextureProxy> proxy,
                                                       const SkIRect& srcRect,
                                                       const SkIPoint& srcOffset,
@@ -164,18 +161,25 @@ static sk_sp<GrRenderTargetContext> convolve_gaussian(GrContext* context,
                                                       SkIRect* contentRect,
                                                       GrTextureDomain::Mode mode,
                                                       const SkImageInfo& dstII,
-                                                      SkBackingFit fit,
-                                                      int radiusY /* temporarary*/) {
+                                                      SkBackingFit fit) {
     SkASSERT(srcRect.width() <= dstII.width() && srcRect.height() <= dstII.height());
 
-    GrPixelConfig config = get_blur_config(proxy.get(), dstII.colorSpace());
+    GrPixelConfig config = get_blur_config(proxy.get());
+
+    GrBackendFormat format = proxy->backendFormat().makeTexture2D();
+    if (!format.isValid()) {
+        return nullptr;
+    }
 
     sk_sp<GrRenderTargetContext> dstRenderTargetContext;
-    dstRenderTargetContext = context->contextPriv().makeDeferredRenderTargetContext(
+    dstRenderTargetContext = context->priv().makeDeferredRenderTargetContext(
+                                                                format,
                                                                 fit, srcRect.width(),
                                                                 srcRect.height(),
                                                                 config,
-                                                                dstII.refColorSpace());
+                                                                dstII.refColorSpace(),
+                                                                1, GrMipMapped::kNo,
+                                                                proxy->origin());
     if (!dstRenderTargetContext) {
         return nullptr;
     }
@@ -207,18 +211,10 @@ static sk_sp<GrRenderTargetContext> convolve_gaussian(GrContext* context,
         dstRect.fTop = midRect.top();
         dstRect.fBottom = midRect.bottom();
 
-#ifdef SK_IGNORE_BLUR_IMAGE_FILTER_FIX
-        *contentRect = dstRect;
-        if (GrTextureDomain::kClamp_Mode == mode) {
-            // We need to adjust bounds because we only fill part of the srcRect in x-pass.
-            contentRect->inset(0, radiusY);
-        }
-#else
         contentRect->fLeft = dstRect.fLeft;
         contentRect->fTop = midRect.fTop;
         contentRect->fRight = dstRect.fRight;
         contentRect->fBottom = midRect.fBottom;
-#endif
     } else {
         bounds[0] = contentRect->top();
         bounds[1] = contentRect->bottom();
@@ -231,19 +227,18 @@ static sk_sp<GrRenderTargetContext> convolve_gaussian(GrContext* context,
         dstRect.fLeft = midRect.left();
         dstRect.fRight = midRect.right();
 
-#ifndef SK_IGNORE_BLUR_IMAGE_FILTER_FIX
         contentRect->fLeft = midRect.fLeft;
         contentRect->fTop = dstRect.fTop;
         contentRect->fRight = midRect.fRight;
         contentRect->fBottom = dstRect.fBottom;
-#endif
     }
     if (!topRect.isEmpty()) {
-        dstRenderTargetContext->clear(&topRect, 0, GrRenderTargetContext::CanClearFullscreen::kNo);
+        dstRenderTargetContext->clear(&topRect, SK_PMColor4fTRANSPARENT,
+                                      GrRenderTargetContext::CanClearFullscreen::kNo);
     }
 
     if (!bottomRect.isEmpty()) {
-        dstRenderTargetContext->clear(&bottomRect, 0,
+        dstRenderTargetContext->clear(&bottomRect, SK_PMColor4fTRANSPARENT,
                                       GrRenderTargetContext::CanClearFullscreen::kNo);
     }
 
@@ -265,7 +260,7 @@ static sk_sp<GrRenderTargetContext> convolve_gaussian(GrContext* context,
     return dstRenderTargetContext;
 }
 
-static sk_sp<GrTextureProxy> decimate(GrContext* context,
+static sk_sp<GrTextureProxy> decimate(GrRecordingContext* context,
                                       sk_sp<GrTextureProxy> src,
                                       SkIPoint* srcOffset,
                                       SkIRect* contentRect,
@@ -277,7 +272,7 @@ static sk_sp<GrTextureProxy> decimate(GrContext* context,
     SkASSERT(SkIsPow2(scaleFactorX) && SkIsPow2(scaleFactorY));
     SkASSERT(scaleFactorX > 1 || scaleFactorY > 1);
 
-    GrPixelConfig config = get_blur_config(src.get(), dstII.colorSpace());
+    GrPixelConfig config = get_blur_config(src.get());
 
     SkIRect srcRect;
     if (GrTextureDomain::kIgnore_Mode == mode) {
@@ -294,22 +289,28 @@ static sk_sp<GrTextureProxy> decimate(GrContext* context,
 
     sk_sp<GrRenderTargetContext> dstRenderTargetContext;
 
+    GrBackendFormat format = src->backendFormat().makeTexture2D();
+    if (!format.isValid()) {
+        return nullptr;
+    }
+
     for (int i = 1; i < scaleFactorX || i < scaleFactorY; i *= 2) {
         shrink_irect_by_2(&dstRect, i < scaleFactorX, i < scaleFactorY);
 
         // We know this will not be the final draw so we are free to make it an approx match.
-        dstRenderTargetContext = context->contextPriv().makeDeferredRenderTargetContext(
+        dstRenderTargetContext = context->priv().makeDeferredRenderTargetContext(
+                                                    format,
                                                     SkBackingFit::kApprox,
                                                     dstRect.fRight,
                                                     dstRect.fBottom,
-                                                    config, dstII.refColorSpace());
+                                                    config, dstII.refColorSpace(),
+                                                    1, GrMipMapped::kNo,
+                                                    src->origin());
         if (!dstRenderTargetContext) {
             return nullptr;
         }
 
         GrPaint paint;
-        paint.setGammaCorrect(dstRenderTargetContext->colorSpaceInfo().isGammaCorrect());
-
         if (GrTextureDomain::kIgnore_Mode != mode && i == 1) {
             // GrTextureDomainEffect does not support kRepeat_Mode with GrSamplerState::Filter.
             GrTextureDomain::Mode modeForScaling = GrTextureDomain::kRepeat_Mode == mode
@@ -357,7 +358,7 @@ static sk_sp<GrTextureProxy> decimate(GrContext* context,
             // X convolution from reading garbage.
             SkIRect clearRect = SkIRect::MakeXYWH(contentRect->fRight, contentRect->fTop,
                                                   radiusX, contentRect->height());
-            dstRenderTargetContext->priv().absClear(&clearRect, 0x0);
+            dstRenderTargetContext->priv().absClear(&clearRect, SK_PMColor4fTRANSPARENT);
         }
     } else {
         if (scaleFactorY > 1) {
@@ -365,7 +366,7 @@ static sk_sp<GrTextureProxy> decimate(GrContext* context,
             // convolution from reading garbage.
             SkIRect clearRect = SkIRect::MakeXYWH(contentRect->fLeft, contentRect->fBottom,
                                                   contentRect->width(), radiusY);
-            dstRenderTargetContext->priv().absClear(&clearRect, 0x0);
+            dstRenderTargetContext->priv().absClear(&clearRect, SK_PMColor4fTRANSPARENT);
         }
     }
 
@@ -373,7 +374,7 @@ static sk_sp<GrTextureProxy> decimate(GrContext* context,
 }
 
 // Expand the contents of 'srcRenderTargetContext' to fit in 'dstII'.
-static sk_sp<GrRenderTargetContext> reexpand(GrContext* context,
+static sk_sp<GrRenderTargetContext> reexpand(GrRecordingContext* context,
                                              sk_sp<GrRenderTargetContext> srcRenderTargetContext,
                                              const SkIRect& localSrcBounds,
                                              int scaleFactorX, int scaleFactorY,
@@ -387,9 +388,9 @@ static sk_sp<GrRenderTargetContext> reexpand(GrContext* context,
     // TODO: it seems like we should actually be clamping here rather than darkening
     // the bottom right edges.
     SkIRect clearRect = SkIRect::MakeXYWH(srcRect.fLeft, srcRect.fBottom, srcRect.width() + 1, 1);
-    srcRenderTargetContext->priv().absClear(&clearRect, 0x0);
+    srcRenderTargetContext->priv().absClear(&clearRect, SK_PMColor4fTRANSPARENT);
     clearRect = SkIRect::MakeXYWH(srcRect.fRight, srcRect.fTop, 1, srcRect.height());
-    srcRenderTargetContext->priv().absClear(&clearRect, 0x0);
+    srcRenderTargetContext->priv().absClear(&clearRect, SK_PMColor4fTRANSPARENT);
 
     sk_sp<GrTextureProxy> srcProxy = srcRenderTargetContext->asTextureProxyRef();
     if (!srcProxy) {
@@ -398,18 +399,24 @@ static sk_sp<GrRenderTargetContext> reexpand(GrContext* context,
 
     srcRenderTargetContext = nullptr; // no longer needed
 
-    GrPixelConfig config = get_blur_config(srcProxy.get(), dstII.colorSpace());
+    GrPixelConfig config = get_blur_config(srcProxy.get());
+
+    GrBackendFormat format = srcProxy->backendFormat().makeTexture2D();
+    if (!format.isValid()) {
+        return nullptr;
+    }
 
     sk_sp<GrRenderTargetContext> dstRenderTargetContext =
-        context->contextPriv().makeDeferredRenderTargetContext(fit, dstII.width(), dstII.height(),
-                                                               config, dstII.refColorSpace());
+        context->priv().makeDeferredRenderTargetContext(format,
+                                                               fit, dstII.width(), dstII.height(),
+                                                               config, dstII.refColorSpace(),
+                                                               1, GrMipMapped::kNo,
+                                                               srcProxy->origin());
     if (!dstRenderTargetContext) {
         return nullptr;
     }
 
     GrPaint paint;
-    paint.setGammaCorrect(dstRenderTargetContext->colorSpaceInfo().isGammaCorrect());
-
     if (GrTextureDomain::kIgnore_Mode != mode) {
         // GrTextureDomainEffect does not support kRepeat_Mode with GrSamplerState::Filter.
         GrTextureDomain::Mode modeForScaling = GrTextureDomain::kRepeat_Mode == mode
@@ -443,7 +450,7 @@ static sk_sp<GrRenderTargetContext> reexpand(GrContext* context,
 
 namespace SkGpuBlurUtils {
 
-sk_sp<GrRenderTargetContext> GaussianBlur(GrContext* context,
+sk_sp<GrRenderTargetContext> GaussianBlur(GrRecordingContext* context,
                                           sk_sp<GrTextureProxy> srcProxy,
                                           sk_sp<SkColorSpace> colorSpace,
                                           const SkIRect& dstBounds,
@@ -455,7 +462,7 @@ sk_sp<GrRenderTargetContext> GaussianBlur(GrContext* context,
                                           SkBackingFit fit) {
     SkASSERT(context);
 
-    const GrPixelConfig config = get_blur_config(srcProxy.get(), colorSpace.get());
+    const GrPixelConfig config = get_blur_config(srcProxy.get());
     SkColorType ct;
     if (!GrPixelConfigToColorType(config, &ct)) {
         return nullptr;
@@ -466,7 +473,7 @@ sk_sp<GrRenderTargetContext> GaussianBlur(GrContext* context,
 
     int scaleFactorX, radiusX;
     int scaleFactorY, radiusY;
-    int maxTextureSize = context->caps()->maxTextureSize();
+    int maxTextureSize = context->priv().caps()->maxTextureSize();
     sigmaX = adjust_sigma(sigmaX, maxTextureSize, &scaleFactorX, &radiusX);
     sigmaY = adjust_sigma(sigmaY, maxTextureSize, &scaleFactorY, &radiusY);
     SkASSERT(sigmaX || sigmaY);
@@ -511,7 +518,7 @@ sk_sp<GrRenderTargetContext> GaussianBlur(GrContext* context,
     if (sigmaX > 0.0f) {
         dstRenderTargetContext = convolve_gaussian(context, std::move(srcProxy), srcRect, srcOffset,
                                                    Direction::kX, radiusX, sigmaX, &localSrcBounds,
-                                                   mode, finalDestII, xFit, radiusY);
+                                                   mode, finalDestII, xFit);
         if (!dstRenderTargetContext) {
             return nullptr;
         }
@@ -521,7 +528,7 @@ sk_sp<GrRenderTargetContext> GaussianBlur(GrContext* context,
             // convolution from reading garbage.
             SkIRect clearRect = SkIRect::MakeXYWH(srcRect.fLeft, srcRect.fBottom,
                                                   srcRect.width(), radiusY);
-            dstRenderTargetContext->priv().absClear(&clearRect, 0x0);
+            dstRenderTargetContext->priv().absClear(&clearRect, SK_PMColor4fTRANSPARENT);
         }
 
         srcProxy = dstRenderTargetContext->asTextureProxyRef();
@@ -536,7 +543,7 @@ sk_sp<GrRenderTargetContext> GaussianBlur(GrContext* context,
     if (sigmaY > 0.0f) {
         dstRenderTargetContext = convolve_gaussian(context, std::move(srcProxy), srcRect, srcOffset,
                                                    Direction::kY, radiusY, sigmaY, &localSrcBounds,
-                                                   mode, finalDestII, yFit, radiusY);
+                                                   mode, finalDestII, yFit);
         if (!dstRenderTargetContext) {
             return nullptr;
         }
@@ -559,10 +566,10 @@ sk_sp<GrRenderTargetContext> GaussianBlur(GrContext* context,
                                           mode, finalDestII, fit);
     }
 
+    SkASSERT(!dstRenderTargetContext || dstRenderTargetContext->origin() == srcProxy->origin());
     return dstRenderTargetContext;
 }
 
 }
 
 #endif
-

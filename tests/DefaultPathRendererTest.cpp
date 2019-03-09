@@ -5,16 +5,32 @@
  * found in the LICENSE file.
  */
 
-#include "Test.h"
-#include "SkBitmap.h"
+#include "SkTypes.h"
 
-#if SK_SUPPORT_GPU
 #include "GrClip.h"
+#include "GrColor.h"
+#include "GrContext.h"
+#include "GrContextFactory.h"
+#include "GrContextOptions.h"
+#include "GrContextPriv.h"
+#include "GrFragmentProcessor.h"
+#include "GrPaint.h"
 #include "GrRenderTargetContext.h"
 #include "GrStyle.h"
 #include "GrTypesPriv.h"
-
+#include "SkBitmap.h"
+#include "SkColor.h"
+#include "SkColorSpace.h"
+#include "SkImageInfo.h"
+#include "SkMatrix.h"
+#include "SkPath.h"
+#include "SkRect.h"
+#include "SkRefCnt.h"
+#include "SkStrokeRec.h"
+#include "Test.h"
 #include "effects/GrConstColorProcessor.h"
+
+#include <utility>
 
 static void only_allow_default(GrContextOptions* options) {
     options->fGpuPathRenderers = GpuPathRenderers::kNone;
@@ -63,38 +79,41 @@ static void run_test(GrContext* ctx, skiatest::Reporter* reporter) {
 
     GrStyle style(SkStrokeRec::kFill_InitStyle);
 
+    GrBackendFormat format =
+            ctx->priv().caps()->getBackendFormatFromColorType(kRGBA_8888_SkColorType);
     {
-        auto rtc =  ctx->contextPriv().makeDeferredRenderTargetContext(
+        auto rtc =  ctx->priv().makeDeferredRenderTargetContext(
+                                                         format,
                                                          SkBackingFit::kApprox,
                                                          kBigSize/2+1, kBigSize/2+1,
                                                          kRGBA_8888_GrPixelConfig, nullptr);
 
-        rtc->clear(nullptr, GrColorPackRGBA(0x0, 0x0, 0x0, 0xFF),
-                   GrRenderTargetContext::CanClearFullscreen::kYes);
+        rtc->clear(nullptr, { 0, 0, 0, 1 }, GrRenderTargetContext::CanClearFullscreen::kYes);
 
         GrPaint paint;
 
-        const GrColor4f color = { 1.0f, 0.0f, 0.0f, 1.0f };
+        const SkPMColor4f color = { 1.0f, 0.0f, 0.0f, 1.0f };
         auto fp = GrConstColorProcessor::Make(color, GrConstColorProcessor::InputMode::kIgnore);
         paint.addColorFragmentProcessor(std::move(fp));
 
         rtc->drawPath(GrNoClip(), std::move(paint), GrAA::kNo,
                       SkMatrix::I(), invPath, style);
 
-        rtc->prepareForExternalIO(0, nullptr);
+        rtc->prepareForExternalIO(SkSurface::BackendSurfaceAccess::kNoAccess,
+                                  SkSurface::kNone_FlushFlags, 0, nullptr);
     }
 
     {
-        auto rtc = ctx->contextPriv().makeDeferredRenderTargetContext(
-                                                        SkBackingFit::kExact, kBigSize, kBigSize,
-                                                        kRGBA_8888_GrPixelConfig, nullptr);
+        auto rtc = ctx->priv().makeDeferredRenderTargetContext(
+                                                        format, SkBackingFit::kExact, kBigSize,
+                                                        kBigSize, kRGBA_8888_GrPixelConfig,
+                                                        nullptr);
 
-        rtc->clear(nullptr, GrColorPackRGBA(0x0, 0x0, 0x0, 0xFF),
-                   GrRenderTargetContext::CanClearFullscreen::kYes);
+        rtc->clear(nullptr, { 0, 0, 0, 1 }, GrRenderTargetContext::CanClearFullscreen::kYes);
 
         GrPaint paint;
 
-        const GrColor4f color = { 0.0f, 1.0f, 0.0f, 1.0f };
+        const SkPMColor4f color = { 0.0f, 1.0f, 0.0f, 1.0f };
         auto fp = GrConstColorProcessor::Make(color, GrConstColorProcessor::InputMode::kIgnore);
         paint.addColorFragmentProcessor(std::move(fp));
 
@@ -121,5 +140,3 @@ DEF_GPUTEST_FOR_CONTEXTS(GrDefaultPathRendererTest,
 
     run_test(ctx, reporter);
 }
-
-#endif

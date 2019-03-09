@@ -17,41 +17,37 @@ class GrMtlGpu;
 class GrMtlTexture : public GrTexture {
 public:
     static sk_sp<GrMtlTexture> CreateNewTexture(GrMtlGpu*, SkBudgeted budgeted,
-                                                const GrSurfaceDesc&, int mipLevels);
+                                                const GrSurfaceDesc&,
+                                                MTLTextureDescriptor*,
+                                                GrMipMapsStatus);
 
-    static sk_sp<GrMtlTexture> MakeWrappedTexture(GrMtlGpu*, const GrSurfaceDesc&,
-                                                  GrWrapOwnership);
+    static sk_sp<GrMtlTexture> MakeWrappedTexture(GrMtlGpu*, const GrSurfaceDesc&, id<MTLTexture>,
+                                                  GrWrapCacheable, GrIOType);
 
     ~GrMtlTexture() override;
 
     id<MTLTexture> mtlTexture() const { return fTexture; }
 
-#ifdef SK_SUPPORT_LEGACY_BACKEND_OBJECTS
-    GrBackendObject getTextureHandle() const override;
-#endif
     GrBackendTexture getBackendTexture() const override;
+
+    GrBackendFormat backendFormat() const override;
 
     void textureParamsModified() override {}
 
     bool reallocForMipmap(GrMtlGpu* gpu, uint32_t mipLevels);
 
-    void setRelease(sk_sp<GrReleaseProcHelper> releaseHelper) override {
-        // Since all MTLResources are inherently ref counted, we can call the Release proc when we
-        // delete the GrMtlTexture without worry of the MTLTexture getting deleted before it is done
-        // on the GPU.
-        fReleaseHelper = std::move(releaseHelper);
-    }
-
 protected:
-    GrMtlTexture(GrMtlGpu*, const GrSurfaceDesc&);
+    GrMtlTexture(GrMtlGpu*, const GrSurfaceDesc&, id<MTLTexture>, GrMipMapsStatus);
 
     GrMtlGpu* getMtlGpu() const;
 
     void onAbandon() override {
         fTexture = nil;
+        INHERITED::onAbandon();
     }
     void onRelease() override {
         fTexture = nil;
+        INHERITED::onRelease();
     }
 
      bool onStealBackendTexture(GrBackendTexture*, SkImage::BackendTextureReleaseProc*) override {
@@ -60,12 +56,14 @@ protected:
 
 private:
     enum Wrapped { kWrapped };
-    GrMtlTexture(GrMtlGpu*, SkBudgeted, const GrSurfaceDesc&, id<MTLTexture>, GrMipMapsStatus);
-   // GrMtlTexture(GrMtlGpu*, Wrapped, const GrSurfaceDesc&, GrMtlImage::Wrapped wrapped);
+
+    GrMtlTexture(GrMtlGpu*, SkBudgeted, const GrSurfaceDesc&, id<MTLTexture>,
+                 GrMipMapsStatus);
+
+    GrMtlTexture(GrMtlGpu*, Wrapped, const GrSurfaceDesc&, id<MTLTexture>, GrMipMapsStatus,
+                 GrWrapCacheable, GrIOType);
 
     id<MTLTexture> fTexture;
-
-    sk_sp<GrReleaseProcHelper>        fReleaseHelper;
 
     typedef GrTexture INHERITED;
 };

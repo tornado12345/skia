@@ -13,11 +13,14 @@
 #include "SkFontDescriptor.h"
 #include "SkImage.h"
 #include "SkImageSource.h"
+#include "SkLightingShader.h"
 #include "SkMakeUnique.h"
 #include "SkMallocPixelRef.h"
 #include "SkMatrixPriv.h"
+#include "SkNormalSource.h"
 #include "SkOSFile.h"
 #include "SkReadBuffer.h"
+#include "SkPicturePriv.h"
 #include "SkPictureRecorder.h"
 #include "SkShaderBase.h"
 #include "SkTableColorFilter.h"
@@ -134,6 +137,15 @@ template<> struct SerializationUtils<SkPoint> {
     }
     static bool Read(SkReadBuffer& reader, SkPoint* data, uint32_t arraySize) {
         return reader.readPointArray(data, arraySize);
+    }
+};
+
+template<> struct SerializationUtils<SkPoint3> {
+    static void Write(SkWriteBuffer& writer, const SkPoint3* data) {
+        writer.writePoint3(*data);
+    }
+    static void Read(SkReadBuffer& reader, SkPoint3* data) {
+        reader.readPoint3(data);
     }
 };
 
@@ -329,11 +341,10 @@ static void compare_bitmaps(skiatest::Reporter* reporter,
 static void serialize_and_compare_typeface(sk_sp<SkTypeface> typeface, const char* text,
                                            skiatest::Reporter* reporter)
 {
-    // Create a paint with the typeface.
+    // Create a font with the typeface.
     SkPaint paint;
     paint.setColor(SK_ColorGRAY);
-    paint.setTextSize(SkIntToScalar(30));
-    paint.setTypeface(std::move(typeface));
+    SkFont font(std::move(typeface), 30);
 
     // Paint some text.
     SkPictureRecorder recorder;
@@ -342,7 +353,7 @@ static void serialize_and_compare_typeface(sk_sp<SkTypeface> typeface, const cha
                                                SkIntToScalar(canvasRect.height()),
                                                nullptr, 0);
     canvas->drawColor(SK_ColorWHITE);
-    canvas->drawText(text, 2, 24, 32, paint);
+    canvas->drawString(text, 24, 32, font, paint);
     sk_sp<SkPicture> picture(recorder.finishRecordingAsPicture());
 
     // Serlialize picture and create its clone from stream.
@@ -360,8 +371,7 @@ static void serialize_and_compare_typeface(sk_sp<SkTypeface> typeface, const cha
 static void TestPictureTypefaceSerialization(skiatest::Reporter* reporter) {
     {
         // Load typeface from file to test CreateFromFile with index.
-        auto data = GetResourceAsData("fonts/test.ttc");
-        auto typeface = SkTypeface::MakeFromStream(new SkMemoryStream(std::move(data)), 1);
+        auto typeface = MakeResourceAsTypeface("fonts/test.ttc", 1);
         if (!typeface) {
             INFOF(reporter, "Could not run fontstream test because test.ttc not found.");
         } else {
@@ -381,7 +391,7 @@ static void TestPictureTypefaceSerialization(skiatest::Reporter* reporter) {
             if (!typeface) {
                 INFOF(reporter, "Could not run fontstream test because Distortable.ttf not created.");
             } else {
-                serialize_and_compare_typeface(std::move(typeface), "abc", reporter);
+                serialize_and_compare_typeface(std::move(typeface), "ab", reporter);
             }
         }
     }
@@ -430,8 +440,10 @@ static void draw_something(SkCanvas* canvas) {
     paint.setColor(SK_ColorRED);
     canvas->drawCircle(SkIntToScalar(kBitmapSize/2), SkIntToScalar(kBitmapSize/2), SkIntToScalar(kBitmapSize/3), paint);
     paint.setColor(SK_ColorBLACK);
-    paint.setTextSize(SkIntToScalar(kBitmapSize/3));
-    canvas->drawString("Picture", SkIntToScalar(kBitmapSize/2), SkIntToScalar(kBitmapSize/4), paint);
+
+    SkFont font;
+    font.setSize(kBitmapSize/3);
+    canvas->drawString("Picture", SkIntToScalar(kBitmapSize/2), SkIntToScalar(kBitmapSize/4), font, paint);
 }
 
 DEF_TEST(Serialization, reporter) {
@@ -439,6 +451,12 @@ DEF_TEST(Serialization, reporter) {
     {
         SkMatrix matrix = SkMatrix::I();
         TestObjectSerialization(&matrix, reporter);
+    }
+
+    // Test point3 serialization
+    {
+        SkPoint3 point;
+        TestObjectSerializationNoAlign<SkPoint3, false>(&point, reporter);
     }
 
     // Test path serialization
@@ -544,19 +562,77 @@ DEF_TEST(Serialization, reporter) {
 
         // Serialize picture
         SkBinaryWriteBuffer writer;
-        pict->flatten(writer);
+        SkPicturePriv::Flatten(pict, writer);
         size_t size = writer.bytesWritten();
         SkAutoTMalloc<unsigned char> data(size);
         writer.writeToMemory(static_cast<void*>(data.get()));
 
         // Deserialize picture
         SkReadBuffer reader(static_cast<void*>(data.get()), size);
-        sk_sp<SkPicture> readPict(SkPicture::MakeFromBuffer(reader));
+        sk_sp<SkPicture> readPict(SkPicturePriv::MakeFromBuffer(reader));
         REPORTER_ASSERT(reporter, reader.isValid());
         REPORTER_ASSERT(reporter, readPict.get());
     }
 
     TestPictureTypefaceSerialization(reporter);
+
+    // Test SkLightingShader/NormalMapSource serialization
+    {
+        const int kTexSize = 2;
+
+        SkLights::Builder builder;
+
+        builder.add(SkLights::Light::MakeDirectional(SkColor3f::Make(1.0f, 1.0f, 1.0f),
+                                                     SkVector3::Make(1.0f, 0.0f, 0.0f)));
+        builder.setAmbientLightColor(SkColor3f::Make(0.2f, 0.2f, 0.2f));
+
+        sk_sp<SkLights> fLights = builder.finish();
+
+        SkBitmap diffuse = sk_tool_utils::create_checkerboard_bitmap(
+                kTexSize, kTexSize,
+                0x00000000,
+                sk_tool_utils::color_to_565(0xFF804020),
+                8);
+
+        SkRect bitmapBounds = SkRect::MakeIWH(diffuse.width(), diffuse.height());
+
+        SkMatrix matrix;
+        SkRect r = SkRect::MakeWH(SkIntToScalar(kTexSize), SkIntToScalar(kTexSize));
+        matrix.setRectToRect(bitmapBounds, r, SkMatrix::kFill_ScaleToFit);
+
+        SkMatrix ctm;
+        ctm.setRotate(45);
+        SkBitmap normals;
+        normals.allocN32Pixels(kTexSize, kTexSize);
+
+        sk_tool_utils::create_frustum_normal_map(&normals, SkIRect::MakeWH(kTexSize, kTexSize));
+        sk_sp<SkShader> normalMap = SkShader::MakeBitmapShader(normals, SkShader::kClamp_TileMode,
+                SkShader::kClamp_TileMode, &matrix);
+        sk_sp<SkNormalSource> normalSource = SkNormalSource::MakeFromNormalMap(std::move(normalMap),
+                                                                               ctm);
+        sk_sp<SkShader> diffuseShader = SkShader::MakeBitmapShader(diffuse,
+                SkShader::kClamp_TileMode, SkShader::kClamp_TileMode, &matrix);
+
+        sk_sp<SkShader> lightingShader = SkLightingShader::Make(diffuseShader,
+                                                                normalSource,
+                                                                fLights);
+        sk_sp<SkShader>(TestFlattenableSerialization(as_SB(lightingShader.get()), true, reporter));
+
+        lightingShader = SkLightingShader::Make(std::move(diffuseShader),
+                                                nullptr,
+                                                fLights);
+        sk_sp<SkShader>(TestFlattenableSerialization(as_SB(lightingShader.get()), true, reporter));
+
+        lightingShader = SkLightingShader::Make(nullptr,
+                                                std::move(normalSource),
+                                                fLights);
+        sk_sp<SkShader>(TestFlattenableSerialization(as_SB(lightingShader.get()), true, reporter));
+
+        lightingShader = SkLightingShader::Make(nullptr,
+                                                nullptr,
+                                                fLights);
+        sk_sp<SkShader>(TestFlattenableSerialization(as_SB(lightingShader.get()), true, reporter));
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -670,8 +746,7 @@ DEF_TEST(WriteBuffer_storage, reporter) {
 }
 
 DEF_TEST(WriteBuffer_external_memory_textblob, reporter) {
-    SkPaint font;
-    font.setTextEncoding(SkPaint::kGlyphID_TextEncoding);
+    SkFont font;
     font.setTypeface(SkTypeface::MakeDefault());
 
     SkTextBlobBuilder builder;

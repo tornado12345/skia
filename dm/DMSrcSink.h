@@ -8,7 +8,6 @@
 #ifndef DMSrcSink_DEFINED
 #define DMSrcSink_DEFINED
 
-#include "DMGpuSupport.h"
 #include "SkBBHFactory.h"
 #include "SkBBoxHierarchy.h"
 #include "SkBitmap.h"
@@ -21,8 +20,6 @@
 #include "gm.h"
 
 //#define TEST_VIA_SVG
-
-namespace skottie { class Animation; }
 
 namespace DM {
 
@@ -103,7 +100,7 @@ struct Sink {
 
 class GMSrc : public Src {
 public:
-    explicit GMSrc(skiagm::GMRegistry::Factory);
+    explicit GMSrc(skiagm::GMFactory);
 
     Error draw(SkCanvas*) const override;
     SkISize size() const override;
@@ -111,7 +108,7 @@ public:
     void modifyGrContextOptions(GrContextOptions* options) const override;
 
 private:
-    skiagm::GMRegistry::Factory fFactory;
+    skiagm::GMFactory fFactory;
 };
 
 class CodecSrc : public Src {
@@ -215,29 +212,15 @@ private:
 
 class ColorCodecSrc : public Src {
 public:
-    enum Mode {
-        // Mimic legacy behavior and apply no color correction.
-        kBaseline_Mode,
-
-        // Color correct images into a specific dst color space.  If you happen to have this
-        // monitor, you're in luck!  The unmarked outputs of this test should display
-        // correctly on this monitor in the Chrome browser.  If not, it's useful to know
-        // that this monitor has a profile that is fairly similar to Adobe RGB.
-        kDst_HPZR30w_Mode,
-
-        kDst_sRGB_Mode,
-    };
-
-    ColorCodecSrc(Path, Mode, SkColorType);
+    ColorCodecSrc(Path, bool decode_to_dst);
 
     Error draw(SkCanvas*) const override;
     SkISize size() const override;
     Name name() const override;
     bool veto(SinkFlags) const override;
 private:
-    Path                    fPath;
-    Mode                    fMode;
-    SkColorType             fColorType;
+    Path fPath;
+    bool fDecodeToDst;
 };
 
 class SKPSrc : public Src {
@@ -251,8 +234,23 @@ private:
     Path fPath;
 };
 
+// This class extracts all the paths from an SKP and then removes unwanted paths according to the
+// provided l/r trail. It then just draws the remaining paths. (Non-path draws are thrown out.) It
+// is useful for finding a reduced repo case for path drawing bugs.
+class BisectSrc : public SKPSrc {
+public:
+    explicit BisectSrc(Path path, const char* trail);
 
-#if !defined(SK_BUILD_FOR_GOOGLE3)
+    Error draw(SkCanvas*) const override;
+
+private:
+    SkString fTrail;
+
+    typedef SKPSrc INHERITED;
+};
+
+
+#if defined(SK_ENABLE_SKOTTIE)
 class SkottieSrc final : public Src {
 public:
     explicit SkottieSrc(Path path);
@@ -266,9 +264,11 @@ private:
     // Generates a kTileCount x kTileCount filmstrip with evenly distributed frames.
     static constexpr int      kTileCount = 5;
 
-    Name                      fName;
-    SkISize                   fTileSize = SkISize::MakeEmpty();
-    sk_sp<skottie::Animation> fAnimation;
+    // Fit kTileCount x kTileCount frames to a 1000x1000 film strip.
+    static constexpr SkScalar kTargetSize = 1000;
+    static constexpr SkScalar kTileSize = kTargetSize / kTileCount;
+
+    Path                      fPath;
 };
 #endif
 
@@ -387,6 +387,26 @@ private:
     typedef GPUSink INHERITED;
 };
 
+class GPUPersistentCacheTestingSink : public GPUSink {
+public:
+    GPUPersistentCacheTestingSink(sk_gpu_test::GrContextFactory::ContextType,
+                                  sk_gpu_test::GrContextFactory::ContextOverrides,
+                                  SkCommandLineConfigGpu::SurfType surfType, int samples,
+                                  bool diText, SkColorType colorType, SkAlphaType alphaType,
+                                  sk_sp<SkColorSpace> colorSpace, bool threaded,
+                                  const GrContextOptions& grCtxOptions);
+
+    Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
+
+    const char* fileExtension() const override {
+        // Suppress writing out results from this config - we just want to do our matching test
+        return nullptr;
+    }
+
+private:
+    typedef GPUSink INHERITED;
+};
+
 class PDFSink : public Sink {
 public:
     PDFSink(bool pdfa, SkScalar rasterDpi) : fPDFA(pdfa), fRasterDpi(rasterDpi) {}
@@ -406,15 +426,6 @@ public:
     SinkFlags flags() const override { return SinkFlags{ SinkFlags::kVector, SinkFlags::kDirect }; }
 };
 
-class PipeSink : public Sink {
-public:
-    PipeSink();
-
-    Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
-    const char* fileExtension() const override { return "skpipe"; }
-    SinkFlags flags() const override { return SinkFlags{ SinkFlags::kVector, SinkFlags::kDirect }; }
-};
-
 class RasterSink : public Sink {
 public:
     explicit RasterSink(SkColorType, sk_sp<SkColorSpace> = nullptr);
@@ -422,9 +433,8 @@ public:
     Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
     const char* fileExtension() const override { return "png"; }
     SinkFlags flags() const override { return SinkFlags{ SinkFlags::kRaster, SinkFlags::kDirect }; }
-protected:
-    void allocPixels(const Src& src, SkBitmap*) const;
 
+private:
     SkColorType         fColorType;
     sk_sp<SkColorSpace> fColorSpace;
 };
@@ -508,12 +518,6 @@ public:
     Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
 };
 
-class ViaPipe : public Via {
-public:
-    explicit ViaPipe(Sink* sink) : Via(sink) {}
-    Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
-};
-
 class ViaTiles : public Via {
 public:
     ViaTiles(int w, int h, SkBBHFactory*, Sink*);
@@ -525,15 +529,11 @@ private:
 
 class ViaDDL : public Via {
 public:
-    ViaDDL(int numDivisions, Sink* sink);
+    ViaDDL(int numReplays, int numDivisions, Sink* sink);
     Error draw(const Src&, SkBitmap*, SkWStream*, SkString*) const override;
 private:
-#if SK_SUPPORT_GPU
-    class PromiseImageHelper;
-    class TileData;
-
+    const int fNumReplays;
     const int fNumDivisions;
-#endif
 };
 
 class ViaSVG : public Via {

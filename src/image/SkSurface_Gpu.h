@@ -23,21 +23,16 @@ public:
     // This is an internal-only factory
     static sk_sp<SkSurface> MakeWrappedRenderTarget(GrContext*, sk_sp<GrRenderTargetContext>);
 
-#ifdef SK_SUPPORT_LEGACY_BACKEND_OBJECTS
-    GrBackendObject onGetTextureHandle(BackendHandleAccess) override;
-    bool onGetRenderTargetHandle(GrBackendObject*, BackendHandleAccess) override;
-#endif
-
     GrBackendTexture onGetBackendTexture(BackendHandleAccess) override;
     GrBackendRenderTarget onGetBackendRenderTarget(BackendHandleAccess) override;
 
     SkCanvas* onNewCanvas() override;
     sk_sp<SkSurface> onNewSurface(const SkImageInfo&) override;
-    sk_sp<SkImage> onNewImageSnapshot() override;
+    sk_sp<SkImage> onNewImageSnapshot(const SkIRect* subset) override;
     void onWritePixels(const SkPixmap&, int x, int y) override;
     void onCopyOnWrite(ContentChangeMode) override;
     void onDiscard() override;
-    GrSemaphoresSubmitted onFlush(int numSemaphores,
+    GrSemaphoresSubmitted onFlush(BackendSurfaceAccess access, FlushFlags flags, int numSemaphores,
                                   GrBackendSemaphore signalSemaphores[]) override;
     bool onWait(int numSemaphores, const GrBackendSemaphore* waitSemaphores) override;
     bool onCharacterize(SkSurfaceCharacterization*) const override;

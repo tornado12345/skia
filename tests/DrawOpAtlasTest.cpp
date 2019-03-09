@@ -7,11 +7,38 @@
 
 #include "SkTypes.h"
 
-#if SK_SUPPORT_GPU
-
+#include "GrContext.h"
+#include "GrContextFactory.h"
 #include "GrContextPriv.h"
+#include "GrDeferredUpload.h"
+#include "GrDrawOpAtlas.h"
+#include "GrDrawingManager.h"
+#include "GrMemoryPool.h"
+#include "GrOnFlushResourceProvider.h"
+#include "GrOpFlushState.h"
+#include "GrRenderTargetContext.h"
+#include "GrSurfaceProxyPriv.h"
+#include "GrTextureProxy.h"
+#include "GrTypesPriv.h"
+#include "GrXferProcessor.h"
+#include "SkBitmap.h"
+#include "SkColor.h"
+#include "SkColorSpace.h"
+#include "SkIPoint16.h"
+#include "SkImageInfo.h"
+#include "SkMatrix.h"
+#include "SkPaint.h"
+#include "SkPoint.h"
+#include "SkRefCnt.h"
 #include "Test.h"
-#include "text/GrGlyphCache.h"
+#include "ops/GrDrawOp.h"
+#include "text/GrAtlasManager.h"
+#include "text/GrTextContext.h"
+#include "text/GrTextTarget.h"
+
+#include <memory>
+
+class GrResourceProvider;
 
 static const int kNumPlots = 2;
 static const int kPlotSize = 32;
@@ -20,7 +47,7 @@ static const int kAtlasSize = kNumPlots * kPlotSize;
 int GrDrawOpAtlas::numAllocated_TestingOnly() const {
     int count = 0;
     for (uint32_t i = 0; i < this->maxPages(); ++i) {
-        if (fProxies[i]->priv().isInstantiated()) {
+        if (fProxies[i]->isInstantiated()) {
             ++count;
         }
     }
@@ -101,18 +128,22 @@ static bool fill_plot(GrDrawOpAtlas* atlas,
 // add and remove pages. Note that this is simulating flush-time behavior.
 DEF_GPUTEST_FOR_RENDERING_CONTEXTS(BasicDrawOpAtlas, reporter, ctxInfo) {
     auto context = ctxInfo.grContext();
-    auto proxyProvider = context->contextPriv().proxyProvider();
-    auto resourceProvider = context->contextPriv().resourceProvider();
-    auto drawingManager = context->contextPriv().drawingManager();
+    auto proxyProvider = context->priv().proxyProvider();
+    auto resourceProvider = context->priv().resourceProvider();
+    auto drawingManager = context->priv().drawingManager();
 
     GrOnFlushResourceProvider onFlushResourceProvider(drawingManager);
     TestingUploadTarget uploadTarget;
 
+    GrBackendFormat format =
+            context->priv().caps()->getBackendFormatFromColorType(kAlpha_8_SkColorType);
+
     std::unique_ptr<GrDrawOpAtlas> atlas = GrDrawOpAtlas::Make(
                                                 proxyProvider,
+                                                format,
                                                 kAlpha_8_GrPixelConfig,
                                                 kAtlasSize, kAtlasSize,
-                                                kNumPlots, kNumPlots,
+                                                kAtlasSize/kNumPlots, kAtlasSize/kNumPlots,
                                                 GrDrawOpAtlas::AllowMultitexturing::kYes,
                                                 EvictionFunc, nullptr);
     check(reporter, atlas.get(), 0, 4, 0);
@@ -145,46 +176,38 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(BasicDrawOpAtlas, reporter, ctxInfo) {
     check(reporter, atlas.get(), 1, 4, 1);
 }
 
-#include "GrTest.h"
-
-#include "GrDrawingManager.h"
-#include "GrOpFlushState.h"
-#include "GrProxyProvider.h"
-
-#include "effects/GrConstColorProcessor.h"
-#include "ops/GrAtlasTextOp.h"
-#include "text/GrAtlasTextContext.h"
-
 // This test verifies that the GrAtlasTextOp::onPrepare method correctly handles a failure
 // when allocating an atlas page.
 DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrAtlasTextOpPreparation, reporter, ctxInfo) {
 
     auto context = ctxInfo.grContext();
 
-    auto gpu = context->contextPriv().getGpu();
-    auto resourceProvider = context->contextPriv().resourceProvider();
-    auto drawingManager = context->contextPriv().drawingManager();
-    auto textContext = drawingManager->getAtlasTextContext();
+    auto gpu = context->priv().getGpu();
+    auto resourceProvider = context->priv().resourceProvider();
+    auto drawingManager = context->priv().drawingManager();
+    auto textContext = drawingManager->getTextContext();
+    auto opMemoryPool = context->priv().opMemoryPool();
 
-    auto rtc =  context->contextPriv().makeDeferredRenderTargetContext(SkBackingFit::kApprox,
-                                                                       32, 32,
-                                                                       kRGBA_8888_GrPixelConfig,
-                                                                       nullptr);
+    GrBackendFormat format =
+            context->priv().caps()->getBackendFormatFromColorType(kRGBA_8888_SkColorType);
+
+    auto rtc =  context->priv().makeDeferredRenderTargetContext(format,
+                                                                SkBackingFit::kApprox,
+                                                                32, 32,
+                                                                kRGBA_8888_GrPixelConfig,
+                                                                nullptr);
 
     SkPaint paint;
     paint.setColor(SK_ColorRED);
-    paint.setLCDRenderText(false);
-    paint.setAntiAlias(false);
-    paint.setSubpixelText(false);
-    GrTextUtils::Paint utilsPaint(&paint, &rtc->colorSpaceInfo());
+
+    SkFont font;
+    font.setEdging(SkFont::Edging::kAlias);
 
     const char* text = "a";
 
-    std::unique_ptr<GrDrawOp> op = textContext->createOp_TestingOnly(context, textContext,
-                                                                     rtc.get(), paint,
-                                                                     SkMatrix::I(), text,
-                                                                     16, 16);
-    op->finalize(*context->caps(), nullptr, GrPixelConfigIsClamped::kNo);
+    std::unique_ptr<GrDrawOp> op = textContext->createOp_TestingOnly(
+            context, textContext, rtc.get(), paint, font, SkMatrix::I(), text, 16, 16);
+    op->finalize(*context->priv().caps(), nullptr, GrFSAAType::kNone);
 
     TestingUploadTarget uploadTarget;
 
@@ -198,7 +221,7 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrAtlasTextOpPreparation, reporter, ctxInfo) 
 
     // Cripple the atlas manager so it can't allocate any pages. This will force a failure
     // in the preparation of the text op
-    auto atlasManager = context->contextPriv().getAtlasManager();
+    auto atlasManager = context->priv().getAtlasManager();
     unsigned int numProxies;
     atlasManager->getProxies(kA8_GrMaskFormat, &numProxies);
     atlasManager->setMaxPages_TestingOnly(0);
@@ -206,7 +229,69 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrAtlasTextOpPreparation, reporter, ctxInfo) 
     flushState.setOpArgs(&opArgs);
     op->prepare(&flushState);
     flushState.setOpArgs(nullptr);
+    opMemoryPool->release(std::move(op));
 }
 
+void test_atlas_config(skiatest::Reporter* reporter, int maxTextureSize, size_t maxBytes,
+                       GrMaskFormat maskFormat, SkISize expectedDimensions,
+                       SkISize expectedPlotDimensions) {
+    GrDrawOpAtlasConfig config(maxTextureSize, maxBytes);
+    REPORTER_ASSERT(reporter, config.atlasDimensions(maskFormat) == expectedDimensions);
+    REPORTER_ASSERT(reporter, config.plotDimensions(maskFormat) == expectedPlotDimensions);
+}
 
-#endif
+DEF_GPUTEST(GrDrawOpAtlasConfig_Basic, reporter, options) {
+    // 1/4 MB
+    test_atlas_config(reporter, 65536, 256 * 1024, kARGB_GrMaskFormat,
+                      { 256, 256 }, { 256, 256 });
+    test_atlas_config(reporter, 65536, 256 * 1024, kA8_GrMaskFormat,
+                      { 512, 512 }, { 256, 256 });
+    // 1/2 MB
+    test_atlas_config(reporter, 65536, 512 * 1024, kARGB_GrMaskFormat,
+                      { 512, 256 }, { 256, 256 });
+    test_atlas_config(reporter, 65536, 512 * 1024, kA8_GrMaskFormat,
+                      { 1024, 512 }, { 256, 256 });
+    // 1 MB
+    test_atlas_config(reporter, 65536, 1024 * 1024, kARGB_GrMaskFormat,
+                      { 512, 512 }, { 256, 256 });
+    test_atlas_config(reporter, 65536, 1024 * 1024, kA8_GrMaskFormat,
+                      { 1024, 1024 }, { 256, 256 });
+    // 2 MB
+    test_atlas_config(reporter, 65536, 2 * 1024 * 1024, kARGB_GrMaskFormat,
+                      { 1024, 512 }, { 256, 256 });
+    test_atlas_config(reporter, 65536, 2 * 1024 * 1024, kA8_GrMaskFormat,
+                      { 2048, 1024 }, { 512, 256 });
+    // 4 MB
+    test_atlas_config(reporter, 65536, 4 * 1024 * 1024, kARGB_GrMaskFormat,
+                      { 1024, 1024 }, { 256, 256 });
+    test_atlas_config(reporter, 65536, 4 * 1024 * 1024, kA8_GrMaskFormat,
+                      { 2048, 2048 }, { 512, 512 });
+    // 8 MB
+    test_atlas_config(reporter, 65536, 8 * 1024 * 1024, kARGB_GrMaskFormat,
+                      { 2048, 1024 }, { 256, 256 });
+    test_atlas_config(reporter, 65536, 8 * 1024 * 1024, kA8_GrMaskFormat,
+                      { 2048, 2048 }, { 512, 512 });
+    // 16 MB (should be same as 8 MB)
+    test_atlas_config(reporter, 65536, 16 * 1024 * 1024, kARGB_GrMaskFormat,
+                      { 2048, 1024 }, { 256, 256 });
+    test_atlas_config(reporter, 65536, 16 * 1024 * 1024, kA8_GrMaskFormat,
+                      { 2048, 2048 }, { 512, 512 });
+
+    // 4MB, restricted texture size
+    test_atlas_config(reporter, 1024, 8 * 1024 * 1024, kARGB_GrMaskFormat,
+                      { 1024, 1024 }, { 256, 256 });
+    test_atlas_config(reporter, 1024, 8 * 1024 * 1024, kA8_GrMaskFormat,
+                      { 1024, 1024 }, { 256, 256 });
+
+    // 3 MB (should be same as 2 MB)
+    test_atlas_config(reporter, 65536, 3 * 1024 * 1024, kARGB_GrMaskFormat,
+                      { 1024, 512 }, { 256, 256 });
+    test_atlas_config(reporter, 65536, 3 * 1024 * 1024, kA8_GrMaskFormat,
+                      { 2048, 1024 }, { 512, 256 });
+
+    // minimum size
+    test_atlas_config(reporter, 65536, 0, kARGB_GrMaskFormat,
+                      { 256, 256 }, { 256, 256 });
+    test_atlas_config(reporter, 65536, 0, kA8_GrMaskFormat,
+                      { 512, 512 }, { 256, 256 });
+}

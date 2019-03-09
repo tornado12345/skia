@@ -12,16 +12,16 @@
  * have been selected to require 32 bits of precision and full IEEE conformance
  */
 
-#include <float.h>
 #include "Test.h"
 
-#if SK_SUPPORT_GPU
 #include "GrContext.h"
 #include "GrContextPriv.h"
 #include "GrProxyProvider.h"
 #include "GrTextureProxy.h"
 #include "ProxyUtils.h"
 #include "SkHalf.h"
+
+#include <float.h>
 
 static const int DEV_W = 100, DEV_H = 100;
 
@@ -53,11 +53,11 @@ void runFPTest(skiatest::Reporter* reporter, GrContext* context, T min, T max, T
             continue;
         }
 
-        sk_sp<GrSurfaceContext> sContext = context->contextPriv().makeWrappedSurfaceContext(
+        sk_sp<GrSurfaceContext> sContext = context->priv().makeWrappedSurfaceContext(
                                                                             std::move(fpProxy));
         REPORTER_ASSERT(reporter, sContext);
 
-        bool result = context->contextPriv().readSurfacePixels(
+        bool result = context->priv().readSurfacePixels(
                 sContext.get(), 0, 0, DEV_W, DEV_H, colorType, nullptr, readBuffer.begin(), 0);
         REPORTER_ASSERT(reporter, result);
         REPORTER_ASSERT(reporter,
@@ -98,5 +98,3 @@ DEF_GPUTEST_FOR_RENDERING_CONTEXTS(HalfFloatRGBATextureTest, reporter, ctxInfo) 
                       kMaxIntegerRepresentableInHalfFloatingPoint, HALF_RGBA_CONTROL_ARRAY_SIZE,
                       GrColorType::kRGBA_F16);
 }
-
-#endif

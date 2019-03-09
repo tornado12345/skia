@@ -52,13 +52,12 @@
 #include "SkClipOp.h"
 #include "SkClipOpPriv.h"
 #include "SkColor.h"
-#include "SkDocument.h"
-#include "SkFlattenable.h"
 #include "SkImageFilter.h"
 #include "SkImageInfo.h"
 #include "SkMalloc.h"
 #include "SkMatrix.h"
 #include "SkNWayCanvas.h"
+#include "SkPDFDocument.h"
 #include "SkPaint.h"
 #include "SkPaintFilterCanvas.h"
 #include "SkPath.h"
@@ -135,7 +134,7 @@ template <typename F> static void multi_canvas_driver(int w, int h, F proc) {
     proc(SkPictureRecorder().beginRecording(SkRect::MakeIWH(w, h)));
 
     SkNullWStream stream;
-    if (auto doc = SkDocument::MakePDF(&stream)) {
+    if (auto doc = SkPDF::MakeDocument(&stream)) {
         proc(doc->beginPage(SkIntToScalar(w), SkIntToScalar(h)));
     }
 
@@ -563,7 +562,7 @@ TEST_STEP(NestedSaveRestoreWithFlush, NestedSaveRestoreWithFlushTestStep);
 
 static void TestPdfDevice(skiatest::Reporter* reporter, const TestData& d, CanvasTestStep* step) {
     SkDynamicMemoryWStream outStream;
-    sk_sp<SkDocument> doc(SkDocument::MakePDF(&outStream));
+    auto doc = SkPDF::MakeDocument(&outStream);
     if (!doc) {
         INFOF(reporter, "PDF disabled; TestPdfDevice test skipped.");
         return;
@@ -625,10 +624,10 @@ static void test_newraster(skiatest::Reporter* reporter) {
     info = SkImageInfo::Make(10, 10, kUnknown_SkColorType, info.alphaType());
     REPORTER_ASSERT(reporter, nullptr == SkCanvas::MakeRasterDirect(info, baseAddr, minRowBytes));
 
-    // We should succeed with a zero-sized valid info
+    // We should not succeed with a zero-sized valid info
     info = SkImageInfo::MakeN32Premul(0, 0);
     canvas = SkCanvas::MakeRasterDirect(info, baseAddr, minRowBytes);
-    REPORTER_ASSERT(reporter, canvas);
+    REPORTER_ASSERT(reporter, nullptr == canvas);
 }
 
 DEF_TEST(Canvas, reporter) {
@@ -807,15 +806,15 @@ DEF_TEST(CanvasClipType, r) {
 
     // test clipstack backend
     SkDynamicMemoryWStream stream;
-    if (auto doc = SkDocument::MakePDF(&stream)) {
+    if (auto doc = SkPDF::MakeDocument(&stream)) {
         test_cliptype(doc->beginPage(100, 100), r);
     }
 }
 
 #ifdef SK_BUILD_FOR_ANDROID_FRAMEWORK
 DEF_TEST(Canvas_LegacyColorBehavior, r) {
-    sk_sp<SkColorSpace> cs = SkColorSpace::MakeRGB(SkColorSpace::kSRGB_RenderTargetGamma,
-                                                   SkColorSpace::kAdobeRGB_Gamut);
+    sk_sp<SkColorSpace> cs = SkColorSpace::MakeRGB(SkNamedTransferFn::kSRGB,
+                                                   SkNamedGamut::kAdobeRGB);
 
     // Make a Adobe RGB bitmap.
     SkBitmap bitmap;
@@ -838,19 +837,19 @@ class ZeroBoundsImageFilter : public SkImageFilter {
 public:
     static sk_sp<SkImageFilter> Make() { return sk_sp<SkImageFilter>(new ZeroBoundsImageFilter); }
 
-    void toString(SkString* str) const override;
-    SK_DECLARE_PUBLIC_FLATTENABLE_DESERIALIZATION_PROCS(ZeroBoundsImageFilter)
-
 protected:
     sk_sp<SkSpecialImage> onFilterImage(SkSpecialImage*, const Context&, SkIPoint*) const override {
         return nullptr;
     }
     sk_sp<SkImageFilter> onMakeColorSpace(SkColorSpaceXformer*) const override { return nullptr; }
-    SkIRect onFilterNodeBounds(const SkIRect&, const SkMatrix&, MapDirection) const override {
+    SkIRect onFilterNodeBounds(const SkIRect&, const SkMatrix&,
+                               MapDirection, const SkIRect* inputRect) const override {
         return SkIRect::MakeEmpty();
     }
 
 private:
+    SK_FLATTENABLE_HOOKS(ZeroBoundsImageFilter)
+
     ZeroBoundsImageFilter() : INHERITED(nullptr, 0, nullptr) {}
 
     typedef SkImageFilter INHERITED;
@@ -859,10 +858,6 @@ private:
 sk_sp<SkFlattenable> ZeroBoundsImageFilter::CreateProc(SkReadBuffer& buffer) {
     SkDEBUGFAIL("Should never get here");
     return nullptr;
-}
-
-void ZeroBoundsImageFilter::toString(SkString* str) const {
-    str->appendf("ZeroBoundsImageFilter: ()");
 }
 
 }  // anonymous namespace

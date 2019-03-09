@@ -20,7 +20,7 @@
 #include "SkMiniRecorder.h"
 #include "SkPaint.h"
 #include "SkPath.h"
-#include "SkPicture.h"
+#include "SkPicturePriv.h"
 #include "SkPictureRecorder.h"
 #include "SkPixelRef.h"
 #include "SkRandom.h"
@@ -108,12 +108,18 @@ public:
         : INHERITED(width, height)
         , fSaveCount(0)
         , fSaveLayerCount(0)
+        , fSaveBehindCount(0)
         , fRestoreCount(0){
     }
 
     SaveLayerStrategy getSaveLayerStrategy(const SaveLayerRec& rec) override {
         ++fSaveLayerCount;
         return this->INHERITED::getSaveLayerStrategy(rec);
+    }
+
+    bool onDoSaveBehind(const SkRect* subset) override {
+        ++fSaveBehindCount;
+        return this->INHERITED::onDoSaveBehind(subset);
     }
 
     void willSave() override {
@@ -128,11 +134,13 @@ public:
 
     unsigned int getSaveCount() const { return fSaveCount; }
     unsigned int getSaveLayerCount() const { return fSaveLayerCount; }
+    unsigned int getSaveBehindCount() const { return fSaveBehindCount; }
     unsigned int getRestoreCount() const { return fRestoreCount; }
 
 private:
     unsigned int fSaveCount;
     unsigned int fSaveLayerCount;
+    unsigned int fSaveBehindCount;
     unsigned int fRestoreCount;
 
     typedef SkCanvas INHERITED;
@@ -452,7 +460,7 @@ static void test_cull_rect_reset(skiatest::Reporter* reporter) {
     canvas->drawRect(bounds, paint);
     canvas->drawRect(bounds, paint);
     sk_sp<SkPicture> p(recorder.finishRecordingAsPictureWithCull(bounds));
-    const SkBigPicture* picture = p->asSkBigPicture();
+    const SkBigPicture* picture = SkPicturePriv::AsSkBigPicture(p);
     REPORTER_ASSERT(reporter, picture);
 
     SkRect finalCullRect = picture->cullRect();
@@ -550,9 +558,8 @@ static void test_gen_id(skiatest::Reporter* reporter) {
 static void test_typeface(skiatest::Reporter* reporter) {
     SkPictureRecorder recorder;
     SkCanvas* canvas = recorder.beginRecording(10, 10);
-    SkPaint paint;
-    paint.setTypeface(SkTypeface::MakeFromName("Arial", SkFontStyle::Italic()));
-    canvas->drawString("Q", 0, 10, paint);
+    SkFont font(SkTypeface::MakeFromName("Arial", SkFontStyle::Italic()));
+    canvas->drawString("Q", 0, 10, font, SkPaint());
     sk_sp<SkPicture> picture(recorder.finishRecordingAsPicture());
     SkDynamicMemoryWStream stream;
     picture->serialize(&stream);
@@ -652,7 +659,6 @@ DEF_TEST(DontOptimizeSaveLayerDrawDrawRestore, reporter) {
     make_bm(&replayBM, 100, 100, SK_ColorBLACK, false);
     SkCanvas replayCanvas(replayBM);
     picture->playback(&replayCanvas);
-    replayCanvas.flush();
 
     // With the bug present, at (55, 55) we would get a fully opaque red
     // intead of a dark red.
