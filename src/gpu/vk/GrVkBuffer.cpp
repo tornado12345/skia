@@ -5,11 +5,11 @@
  * found in the LICENSE file.
  */
 
-#include "GrVkBuffer.h"
-#include "GrVkGpu.h"
-#include "GrVkMemory.h"
-#include "GrVkTransferBuffer.h"
-#include "GrVkUtil.h"
+#include "src/gpu/vk/GrVkBuffer.h"
+#include "src/gpu/vk/GrVkGpu.h"
+#include "src/gpu/vk/GrVkMemory.h"
+#include "src/gpu/vk/GrVkTransferBuffer.h"
+#include "src/gpu/vk/GrVkUtil.h"
 
 #define VK_CALL(GPU, X) GR_VK_CALL(GPU->vkInterface(), X)
 
@@ -19,7 +19,8 @@
 #define VALIDATE() do {} while(false)
 #endif
 
-const GrVkBuffer::Resource* GrVkBuffer::Create(const GrVkGpu* gpu, const Desc& desc) {
+const GrVkBuffer::Resource* GrVkBuffer::Create(GrVkGpu* gpu, const Desc& desc) {
+    SkASSERT(!gpu->protectedContext() || (gpu->protectedContext() == desc.fDynamic));
     VkBuffer       buffer;
     GrVkAlloc      alloc;
 
@@ -35,6 +36,9 @@ const GrVkBuffer::Resource* GrVkBuffer::Create(const GrVkGpu* gpu, const Desc& d
             break;
         case kIndex_Type:
             bufInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+            break;
+        case kIndirect_Type:
+            bufInfo.usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
             break;
         case kUniform_Type:
             bufInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
@@ -70,7 +74,7 @@ const GrVkBuffer::Resource* GrVkBuffer::Create(const GrVkGpu* gpu, const Desc& d
         return nullptr;
     }
 
-    const GrVkBuffer::Resource* resource = new GrVkBuffer::Resource(buffer, alloc, desc.fType);
+    const GrVkBuffer::Resource* resource = new GrVkBuffer::Resource(gpu, buffer, alloc, desc.fType);
     if (!resource) {
         VK_CALL(gpu, DestroyBuffer(gpu->device(), buffer, nullptr));
         GrVkMemory::FreeBufferMemory(gpu, desc.fType, alloc);
@@ -103,26 +107,25 @@ void GrVkBuffer::addMemoryBarrier(const GrVkGpu* gpu,
                                 &bufferMemoryBarrier);
 }
 
-void GrVkBuffer::Resource::freeGPUData(GrVkGpu* gpu) const {
+void GrVkBuffer::Resource::freeGPUData() const {
     SkASSERT(fBuffer);
     SkASSERT(fAlloc.fMemory);
-    VK_CALL(gpu, DestroyBuffer(gpu->device(), fBuffer, nullptr));
-    GrVkMemory::FreeBufferMemory(gpu, fType, fAlloc);
+    VK_CALL(fGpu, DestroyBuffer(fGpu->device(), fBuffer, nullptr));
+    GrVkMemory::FreeBufferMemory(fGpu, fType, fAlloc);
 }
 
-void GrVkBuffer::vkRelease(const GrVkGpu* gpu) {
+void GrVkBuffer::vkRelease(GrVkGpu* gpu) {
     VALIDATE();
-    fResource->recycle(const_cast<GrVkGpu*>(gpu));
-    fResource = nullptr;
-    if (!fDesc.fDynamic) {
-        delete[] (unsigned char*)fMapPtr;
+    if (this->vkIsMapped()) {
+        // Only unmap resources that are not backed by a CPU buffer. Otherwise we may end up
+        // creating a new transfer buffer resources that sends us into a spiral of creating and
+        // destroying resources if we are at our budget limit. Also there really isn't a need to
+        // upload the CPU data if we are deleting this buffer.
+        if (fDesc.fDynamic) {
+            this->vkUnmap(gpu);
+        }
     }
-    fMapPtr = nullptr;
-    VALIDATE();
-}
-
-void GrVkBuffer::vkAbandon() {
-    fResource->unrefAndAbandon();
+    fResource->recycle();
     fResource = nullptr;
     if (!fDesc.fDynamic) {
         delete[] (unsigned char*)fMapPtr;
@@ -152,7 +155,7 @@ void GrVkBuffer::internalMap(GrVkGpu* gpu, size_t size, bool* createdNewBuffer) 
     if (!fResource->unique()) {
         if (fDesc.fDynamic) {
             // in use by the command buffer, so we need to create a new one
-            fResource->recycle(gpu);
+            fResource->recycle();
             fResource = this->createResource(gpu, fDesc);
             if (createdNewBuffer) {
                 *createdNewBuffer = true;
@@ -184,6 +187,35 @@ void GrVkBuffer::internalMap(GrVkGpu* gpu, size_t size, bool* createdNewBuffer) 
     VALIDATE();
 }
 
+void GrVkBuffer::copyCpuDataToGpuBuffer(GrVkGpu* gpu, const void* src, size_t size) {
+    SkASSERT(src);
+    // We should never call this method in protected contexts.
+    SkASSERT(!gpu->protectedContext());
+    // The vulkan api restricts the use of vkCmdUpdateBuffer to updates that are less than or equal
+    // to 65536 bytes and a size the is 4 byte aligned.
+    if ((size <= 65536) && (0 == (size & 0x3)) && !gpu->vkCaps().avoidUpdateBuffers()) {
+        gpu->updateBuffer(this, src, this->offset(), size);
+    } else {
+        sk_sp<GrVkTransferBuffer> transferBuffer =
+                GrVkTransferBuffer::Make(gpu, size, GrVkBuffer::kCopyRead_Type);
+        if (!transferBuffer) {
+            return;
+        }
+
+        char* buffer = (char*) transferBuffer->map();
+        memcpy (buffer, src, size);
+        transferBuffer->unmap();
+
+        gpu->copyBuffer(transferBuffer.get(), this, 0, this->offset(), size);
+    }
+    this->addMemoryBarrier(gpu,
+                           VK_ACCESS_TRANSFER_WRITE_BIT,
+                           buffer_type_to_access_flags(fDesc.fType),
+                           VK_PIPELINE_STAGE_TRANSFER_BIT,
+                           VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                           false);
+}
+
 void GrVkBuffer::internalUnmap(GrVkGpu* gpu, size_t size) {
     VALIDATE();
     SkASSERT(this->vkIsMapped());
@@ -199,29 +231,8 @@ void GrVkBuffer::internalUnmap(GrVkGpu* gpu, size_t size) {
         GrVkMemory::UnmapAlloc(gpu, alloc);
         fMapPtr = nullptr;
     } else {
-        // vkCmdUpdateBuffer requires size < 64k and 4-byte alignment.
-        // https://bugs.chromium.org/p/skia/issues/detail?id=7488
-        if (size <= 65536 && 0 == (size & 0x3)) {
-            gpu->updateBuffer(this, fMapPtr, this->offset(), size);
-        } else {
-            sk_sp<GrVkTransferBuffer> transferBuffer =
-                    GrVkTransferBuffer::Make(gpu, size, GrVkBuffer::kCopyRead_Type);
-            if (!transferBuffer) {
-                return;
-            }
-
-            char* buffer = (char*) transferBuffer->map();
-            memcpy (buffer, fMapPtr, size);
-            transferBuffer->unmap();
-
-            gpu->copyBuffer(transferBuffer.get(), this, 0, this->offset(), size);
-        }
-        this->addMemoryBarrier(gpu,
-                               VK_ACCESS_TRANSFER_WRITE_BIT,
-                               buffer_type_to_access_flags(fDesc.fType),
-                               VK_PIPELINE_STAGE_TRANSFER_BIT,
-                               VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
-                               false);
+        SkASSERT(fMapPtr);
+        this->copyCpuDataToGpuBuffer(gpu, fMapPtr, size);
     }
 }
 
@@ -236,20 +247,25 @@ bool GrVkBuffer::vkUpdateData(GrVkGpu* gpu, const void* src, size_t srcSizeInByt
         return false;
     }
 
-    this->internalMap(gpu, srcSizeInBytes, createdNewBuffer);
-    if (!fMapPtr) {
-        return false;
+    if (fDesc.fDynamic) {
+        this->internalMap(gpu, srcSizeInBytes, createdNewBuffer);
+        if (!fMapPtr) {
+            return false;
+        }
+
+        memcpy(fMapPtr, src, srcSizeInBytes);
+        this->internalUnmap(gpu, srcSizeInBytes);
+    } else {
+        this->copyCpuDataToGpuBuffer(gpu, src, srcSizeInBytes);
     }
 
-    memcpy(fMapPtr, src, srcSizeInBytes);
-
-    this->internalUnmap(gpu, srcSizeInBytes);
 
     return true;
 }
 
 void GrVkBuffer::validate() const {
-    SkASSERT(!fResource || kVertex_Type == fDesc.fType || kIndex_Type == fDesc.fType
-             || kTexel_Type == fDesc.fType || kCopyRead_Type == fDesc.fType
-             || kCopyWrite_Type == fDesc.fType || kUniform_Type == fDesc.fType);
+    SkASSERT(!fResource || kVertex_Type == fDesc.fType || kIndex_Type == fDesc.fType ||
+             kIndirect_Type == fDesc.fType || kTexel_Type == fDesc.fType ||
+             kCopyRead_Type == fDesc.fType || kCopyWrite_Type == fDesc.fType ||
+             kUniform_Type == fDesc.fType);
 }

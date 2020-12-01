@@ -8,7 +8,7 @@
 #ifndef SkEmptyShader_DEFINED
 #define SkEmptyShader_DEFINED
 
-#include "SkShaderBase.h"
+#include "src/shaders/SkShaderBase.h"
 
 // TODO: move this to private, as there is a public factory on SkShader
 
@@ -33,14 +33,19 @@ protected:
         // which will write data we don't care to serialize or decode.
     }
 
-    bool onAppendStages(const StageRec&) const override {
+    bool onAppendStages(const SkStageRec&) const override {
         return false;
     }
+
+    skvm::Color onProgram(skvm::Builder*, skvm::Coord, skvm::Coord, skvm::Color,
+                          const SkMatrixProvider&, const SkMatrix*,
+                          SkFilterQuality, const SkColorInfo&,
+                          skvm::Uniforms*, SkArenaAlloc*) const override;
 
 private:
     SK_FLATTENABLE_HOOKS(SkEmptyShader)
 
-    typedef SkShaderBase INHERITED;
+    using INHERITED = SkShaderBase;
 };
 
 #endif

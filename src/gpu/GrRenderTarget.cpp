@@ -6,59 +6,27 @@
  */
 
 
-#include "GrRenderTarget.h"
+#include "src/gpu/GrRenderTarget.h"
 
-#include "GrContext.h"
-#include "GrContextPriv.h"
-#include "GrRenderTargetContext.h"
-#include "GrGpu.h"
-#include "GrRenderTargetOpList.h"
-#include "GrRenderTargetPriv.h"
-#include "GrSamplePatternDictionary.h"
-#include "GrStencilAttachment.h"
-#include "GrStencilSettings.h"
-#include "SkRectPriv.h"
+#include "src/core/SkRectPriv.h"
+#include "src/gpu/GrAttachment.h"
+#include "src/gpu/GrBackendUtils.h"
+#include "src/gpu/GrGpu.h"
+#include "src/gpu/GrRenderTargetContext.h"
+#include "src/gpu/GrSamplePatternDictionary.h"
+#include "src/gpu/GrStencilSettings.h"
 
-GrRenderTarget::GrRenderTarget(GrGpu* gpu, const GrSurfaceDesc& desc,
-                               GrStencilAttachment* stencil)
-        : INHERITED(gpu, desc)
-        , fSampleCnt(desc.fSampleCnt)
-        , fSamplePatternKey(GrSamplePatternDictionary::kInvalidSamplePatternKey)
-        , fStencilAttachment(stencil) {
-    SkASSERT(desc.fFlags & kRenderTarget_GrSurfaceFlag);
-    SkASSERT(!this->hasMixedSamples() || fSampleCnt > 1);
-    fResolveRect = SkRectPriv::MakeILargestInverted();
-}
+GrRenderTarget::GrRenderTarget(GrGpu* gpu,
+                               const SkISize& dimensions,
+                               int sampleCount,
+                               GrProtected isProtected,
+                               GrAttachment* stencil)
+        : INHERITED(gpu, dimensions, isProtected)
+        , fStencilAttachment(stencil)
+        , fSampleCnt(sampleCount)
+        , fSamplePatternKey(GrSamplePatternDictionary::kInvalidSamplePatternKey) {}
 
 GrRenderTarget::~GrRenderTarget() = default;
-
-void GrRenderTarget::flagAsNeedingResolve(const SkIRect* rect) {
-    if (kCanResolve_ResolveType == getResolveType()) {
-        if (rect) {
-            fResolveRect.join(*rect);
-            if (!fResolveRect.intersect(0, 0, this->width(), this->height())) {
-                fResolveRect.setEmpty();
-            }
-        } else {
-            fResolveRect.setLTRB(0, 0, this->width(), this->height());
-        }
-    }
-}
-
-void GrRenderTarget::overrideResolveRect(const SkIRect rect) {
-    fResolveRect = rect;
-    if (fResolveRect.isEmpty()) {
-        fResolveRect = SkRectPriv::MakeILargestInverted();
-    } else {
-        if (!fResolveRect.intersect(0, 0, this->width(), this->height())) {
-            fResolveRect = SkRectPriv::MakeILargestInverted();
-        }
-    }
-}
-
-void GrRenderTarget::flagAsResolved() {
-    fResolveRect = SkRectPriv::MakeILargestInverted();
-}
 
 void GrRenderTarget::onRelease() {
     fStencilAttachment = nullptr;
@@ -72,36 +40,59 @@ void GrRenderTarget::onAbandon() {
     INHERITED::onAbandon();
 }
 
-///////////////////////////////////////////////////////////////////////////////
+void GrRenderTarget::attachStencilAttachment(sk_sp<GrAttachment> stencil) {
+#ifdef SK_DEBUG
+    if (fSampleCnt == 1) {
+        // TODO: We don't expect a mixed sampled render target to ever change its stencil buffer
+        // right now. But if it does swap in a stencil buffer with a different number of samples,
+        // and if we have a valid fSamplePatternKey, we will need to invalidate fSamplePatternKey
+        // here and add tests to make sure we it properly.
+        SkASSERT(GrSamplePatternDictionary::kInvalidSamplePatternKey == fSamplePatternKey);
+    } else {
+        // Render targets with >1 color sample should never use mixed samples. (This would lead to
+        // different sample patterns, depending on stencil state.)
+        SkASSERT(!stencil || stencil->numSamples() == fSampleCnt);
+    }
+#endif
 
-void GrRenderTargetPriv::attachStencilAttachment(sk_sp<GrStencilAttachment> stencil) {
-    if (!stencil && !fRenderTarget->fStencilAttachment) {
+    if (!stencil && !fStencilAttachment) {
         // No need to do any work since we currently don't have a stencil attachment and
         // we're not actually adding one.
         return;
     }
-    fRenderTarget->fStencilAttachment = std::move(stencil);
-    if (!fRenderTarget->completeStencilAttachment()) {
-        fRenderTarget->fStencilAttachment = nullptr;
+
+    fStencilAttachment = std::move(stencil);
+    if (!this->completeStencilAttachment()) {
+        fStencilAttachment = nullptr;
     }
 }
 
-int GrRenderTargetPriv::numStencilBits() const {
+int GrRenderTarget::numStencilBits() const {
     SkASSERT(this->getStencilAttachment());
-    return this->getStencilAttachment()->bits();
+    return GrBackendFormatStencilBits(this->getStencilAttachment()->backendFormat());
 }
 
-int GrRenderTargetPriv::getSamplePatternKey(const GrPipeline& pipeline) const {
-    SkASSERT(fRenderTarget->fSampleCnt > 1);
-    if (GrSamplePatternDictionary::kInvalidSamplePatternKey == fRenderTarget->fSamplePatternKey) {
-        fRenderTarget->fSamplePatternKey =
-                fRenderTarget->getGpu()->findOrAssignSamplePatternKey(fRenderTarget, pipeline);
+int GrRenderTarget::getSamplePatternKey() {
+#ifdef SK_DEBUG
+    if (fSampleCnt <= 1) {
+        // If the color buffer is not multisampled, the sample pattern better come from the stencil
+        // buffer (mixed samples).
+        SkASSERT(fStencilAttachment && fStencilAttachment->numSamples() > 1);
+    } else {
+        // The color sample count and stencil count cannot both be unequal and both greater than
+        // one. If this were the case, there would be more than one sample pattern associated with
+        // the render target.
+        SkASSERT(!fStencilAttachment || fStencilAttachment->numSamples() == fSampleCnt);
     }
-    SkASSERT(GrSamplePatternDictionary::kInvalidSamplePatternKey
-                     != fRenderTarget->fSamplePatternKey);
-    // Verify we always have the same sample pattern key every time this is called, regardless of
-    // pipeline state.
-    SkASSERT(fRenderTarget->getGpu()->findOrAssignSamplePatternKey(fRenderTarget, pipeline)
-                     == fRenderTarget->fSamplePatternKey);
-    return fRenderTarget->fSamplePatternKey;
+#endif
+    if (GrSamplePatternDictionary::kInvalidSamplePatternKey == fSamplePatternKey) {
+        fSamplePatternKey = this->getGpu()->findOrAssignSamplePatternKey(this);
+    }
+    SkASSERT(fSamplePatternKey != GrSamplePatternDictionary::kInvalidSamplePatternKey);
+    return fSamplePatternKey;
+}
+
+const SkTArray<SkPoint>& GrRenderTarget::getSampleLocations() {
+    int samplePatternKey = this->getSamplePatternKey();
+    return this->getGpu()->retrieveSampleLocations(samplePatternKey);
 }

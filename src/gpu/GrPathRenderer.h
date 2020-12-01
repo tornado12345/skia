@@ -8,18 +8,18 @@
 #ifndef GrPathRenderer_DEFINED
 #define GrPathRenderer_DEFINED
 
-#include "GrTypesPriv.h"
-#include "SkTArray.h"
-#include "SkRefCnt.h"
+#include "include/core/SkRefCnt.h"
+#include "include/private/GrTypesPriv.h"
+#include "include/private/SkTArray.h"
 
 class GrCaps;
 class GrClip;
-class GrFixedClip;
 class GrHardClip;
 class GrPaint;
 class GrRecordingContext;
 class GrRenderTargetContext;
-class GrShape;
+class GrRenderTargetProxy;
+class GrStyledShape;
 class GrStyle;
 struct GrUserStencilSettings;
 struct SkIRect;
@@ -27,11 +27,13 @@ class SkMatrix;
 class SkPath;
 
 /**
- *  Base class for drawing paths into a GrOpList.
+ *  Base class for drawing paths into a GrOpsTask.
  */
-class SK_API GrPathRenderer : public SkRefCnt {
+class GrPathRenderer : public SkRefCnt {
 public:
     GrPathRenderer();
+
+    virtual const char* name() const = 0;
 
     /**
      * A caller may wish to use a path renderer to draw a path into the stencil buffer. However,
@@ -64,7 +66,7 @@ public:
      * @param shape   the shape that will be drawn. Must be simple fill styled and non-inverse
      *                filled.
      */
-    StencilSupport getStencilSupport(const GrShape& shape) const;
+    StencilSupport getStencilSupport(const GrStyledShape& shape) const;
 
     enum class CanDrawPath {
         kNo,
@@ -76,9 +78,11 @@ public:
         SkDEBUGCODE(CanDrawPathArgs() { memset(this, 0, sizeof(*this)); }) // For validation.
 
         const GrCaps*               fCaps;
+        const GrRenderTargetProxy*  fProxy;
         const SkIRect*              fClipConservativeBounds;
         const SkMatrix*             fViewMatrix;
-        const GrShape*              fShape;
+        const GrStyledShape*        fShape;
+        const GrPaint*              fPaint;
         GrAAType                    fAAType;
         bool                        fTargetIsWrappedVkSecondaryCB;
 
@@ -88,6 +92,7 @@ public:
 #ifdef SK_DEBUG
         void validate() const {
             SkASSERT(fCaps);
+            SkASSERT(fProxy);
             SkASSERT(fClipConservativeBounds);
             SkASSERT(fViewMatrix);
             SkASSERT(fShape);
@@ -113,7 +118,7 @@ public:
         const GrClip*                fClip;
         const SkIRect*               fClipConservativeBounds;
         const SkMatrix*              fViewMatrix;
-        const GrShape*               fShape;
+        const GrStyledShape*         fShape;
         GrAAType                     fAAType;
         bool                         fGammaCorrect;
 #ifdef SK_DEBUG
@@ -121,7 +126,6 @@ public:
             SkASSERT(fContext);
             SkASSERT(fUserStencilSettings);
             SkASSERT(fRenderTargetContext);
-            SkASSERT(fClip);
             SkASSERT(fClipConservativeBounds);
             SkASSERT(fViewMatrix);
             SkASSERT(fShape);
@@ -145,8 +149,8 @@ public:
         const GrHardClip*      fClip;
         const SkIRect*         fClipConservativeBounds;
         const SkMatrix*        fViewMatrix;
-        GrAAType               fAAType;
-        const GrShape*         fShape;
+        const GrStyledShape*   fShape;
+        GrAA                   fDoStencilMSAA;
 
         SkDEBUGCODE(void validate() const);
     };
@@ -170,8 +174,7 @@ protected:
     // Helper for getting the device bounds of a path. Inverse filled paths will have bounds set
     // by devSize. Non-inverse path bounds will not necessarily be clipped to devSize.
     static void GetPathDevBounds(const SkPath& path,
-                                 int devW,
-                                 int devH,
+                                 SkISize devSize,
                                  const SkMatrix& matrix,
                                  SkRect* bounds);
 
@@ -179,7 +182,7 @@ private:
     /**
      * Subclass overrides if it has any limitations of stenciling support.
      */
-    virtual StencilSupport onGetStencilSupport(const GrShape&) const {
+    virtual StencilSupport onGetStencilSupport(const GrStyledShape&) const {
         return kNoRestriction_StencilSupport;
     }
 
@@ -199,7 +202,7 @@ private:
      */
     virtual void onStencilPath(const StencilPathArgs&);
 
-    typedef SkRefCnt INHERITED;
+    using INHERITED = SkRefCnt;
 };
 
 #endif

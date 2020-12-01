@@ -5,25 +5,29 @@
  * found in the LICENSE file.
  */
 
-#include "Resources.h"
-#include "SkAndroidCodec.h"
-#include "SkBitmap.h"
-#include "SkCodec.h"
-#include "SkCodecImageGenerator.h"
-#include "SkColor.h"
-#include "SkData.h"
-#include "SkEncodedImageFormat.h"
-#include "SkImageGenerator.h"
-#include "SkImageInfo.h"
-#include "SkPixmapPriv.h"
-#include "SkRefCnt.h"
-#include "SkSize.h"
-#include "SkString.h"
-#include "SkTypes.h"
-#include "Test.h"
+#include "include/codec/SkAndroidCodec.h"
+#include "include/codec/SkCodec.h"
+#include "include/core/SkBitmap.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkColorSpace.h"
+#include "include/core/SkData.h"
+#include "include/core/SkEncodedImageFormat.h"
+#include "include/core/SkImageGenerator.h"
+#include "include/core/SkImageInfo.h"
+#include "include/core/SkRefCnt.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/core/SkTypes.h"
+#include "include/third_party/skcms/skcms.h"
+#include "src/codec/SkCodecImageGenerator.h"
+#include "src/core/SkPixmapPriv.h"
+#include "tests/Test.h"
+#include "tools/Resources.h"
 
-#include <algorithm>
+#include <string.h>
+#include <initializer_list>
 #include <memory>
+#include <utility>
 
 static SkISize times(const SkISize& size, float factor) {
     return { (int) (size.width() * factor), (int) (size.height() * factor) };
@@ -156,7 +160,7 @@ DEF_TEST(AndroidCodec_wide, r) {
         return;
     }
 
-    auto expected = SkColorSpace::MakeRGB(SkNamedTransferFn::kSRGB, SkNamedGamut::kDCIP3);
+    auto expected = SkColorSpace::MakeRGB(SkNamedTransferFn::kSRGB, SkNamedGamut::kDisplayP3);
     REPORTER_ASSERT(r, SkColorSpace::Equals(cs.get(), expected.get()));
 }
 
@@ -204,9 +208,10 @@ DEF_TEST(AndroidCodec_orientation, r) {
         return;
     }
 
-    for (const char* ext : { "jpg", "webp" })
+    for (const char* filePathFormatStr : {"images/orientation/%c_420.jpg",
+                                          "images/orientation/%c.webp"})
     for (char i = '1'; i <= '8'; ++i) {
-        SkString path = SkStringPrintf("images/orientation/%c.%s", i, ext);
+        SkString path = SkStringPrintf(filePathFormatStr, i);
         auto data = GetResourceAsData(path.c_str());
         auto gen = SkCodecImageGenerator::MakeFromEncodedCodec(data);
         if (!gen) {
@@ -271,7 +276,7 @@ DEF_TEST(AndroidCodec_sampledOrientation, r) {
     }
 
     // kRightTop_SkEncodedOrigin    = 6, // Rotated 90 CW
-    auto path = "images/orientation/6.jpg";
+    auto path = "images/orientation/6_420.jpg";
     auto data = GetResourceAsData(path);
     if (!data) {
         ERRORF(r, "Failed to get resource %s", path);
@@ -287,11 +292,69 @@ DEF_TEST(AndroidCodec_sampledOrientation, r) {
     options.fSampleSize = sampleSize;
 
     SkBitmap bm;
-    auto info = androidCodec->getInfo().makeWH(sampledDims.width(), sampledDims.height());
+    auto info = androidCodec->getInfo().makeDimensions(sampledDims);
     bm.allocPixels(info);
 
     auto result = androidCodec->getAndroidPixels(info, bm.getPixels(), bm.rowBytes(), &options);
     if (result != SkCodec::kSuccess) {
         ERRORF(r, "got result \"%s\"\n", SkCodec::ResultToString(result));
+    }
+}
+
+DEF_TEST(AndroidCodec_animatedOrientation, r) {
+    if (GetResourcePath().isEmpty()) {
+        return;
+    }
+
+    static const struct {
+        const char* path;
+        SkEncodedOrigin origin;
+    } gRec[] = {
+        { "images/stoplight.webp",   kDefault_SkEncodedOrigin },
+        { "images/stoplight_h.webp", kLeftBottom_SkEncodedOrigin } // Rotated 90 CCW
+    };
+    for (auto rec : gRec) {
+        auto data = GetResourceAsData(rec.path);
+        if (!data) {
+            ERRORF(r, "Failed to get resource %s", rec.path);
+            return;
+        }
+
+        // SkAndroidCodec now allows decoding frames beyond the first, but combining this with
+        // kRespect-ing a non-kDefault_SkEncodedOrigin is not supported. If a frame depends on
+        // a prior frame, we allow a client to provide that prior frame. But in order to respect
+        // the origin, we would need to transform the prior frame back to the original orientation
+        // in order to blend (and potentially erase, for a kRestoreBG frame) just to transform it
+        // back. Instead, force the client to handle the orientation after the fact.
+        for (auto behavior : { SkAndroidCodec::ExifOrientationBehavior::kRespect,
+                               SkAndroidCodec::ExifOrientationBehavior::kIgnore   }) {
+            auto androidCodec = SkAndroidCodec::MakeFromCodec(SkCodec::MakeFromData(data),
+                                                              behavior);
+            REPORTER_ASSERT(r, androidCodec->codec()->getOrigin() == rec.origin);
+
+            auto info = androidCodec->getInfo();
+            SkBitmap bm;
+            bm.allocPixels(info);
+            auto result = androidCodec->getAndroidPixels(info, bm.getPixels(), bm.rowBytes());
+            REPORTER_ASSERT(r, result == SkCodec::kSuccess);
+
+            SkAndroidCodec::AndroidOptions options;
+            options.fFrameIndex = 1;
+            options.fPriorFrame = 0;
+            result = androidCodec->getAndroidPixels(info, bm.getPixels(), bm.rowBytes(), &options);
+            switch (behavior) {
+                case SkAndroidCodec::ExifOrientationBehavior::kRespect:
+                    if (rec.origin != kDefault_SkEncodedOrigin) {
+                        REPORTER_ASSERT(r, result == SkCodec::kInvalidParameters,
+                                "Should not be able to decode frame 1 with exif orientation"
+                                " directly! Result: %s", SkCodec::ResultToString(result));
+                        break;
+                    }
+                    [[fallthrough]];
+                case SkAndroidCodec::ExifOrientationBehavior::kIgnore:
+                    REPORTER_ASSERT(r, result == SkCodec::kSuccess);
+                    break;
+            }
+        }
     }
 }

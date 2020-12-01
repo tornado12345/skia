@@ -5,16 +5,24 @@
  * found in the LICENSE file.
  */
 
-#include "GrPrimitiveProcessor.h"
+#include "src/gpu/GrPrimitiveProcessor.h"
 
-#include "GrCoordTransform.h"
+#include "src/gpu/GrFragmentProcessor.h"
 
 /**
- * We specialize the vertex code for each of these matrix types.
+ * We specialize the vertex or fragment coord transform code for these matrix types, and where
+ * the transform code is applied.
  */
-enum MatrixType {
-    kNoPersp_MatrixType  = 0,
-    kGeneral_MatrixType  = 1,
+enum SampleFlag {
+    kExplicitlySampled_Flag      = 0b00001,  // GrFP::isSampledWithExplicitCoords()
+
+    kNone_SampleMatrix_Flag      = 0b00100, // GrFP::sampleUsage()::hasMatrix() == false
+    kUniform_SampleMatrix_Flag   = 0b01000, // GrFP::sampleUsage()::hasUniformMatrix()
+    kVariable_SampleMatrix_Flag  = 0b01100, // GrFP::sampleUsage()::hasVariableMatrix()
+
+    // Currently, sample(matrix) only specializes on no-perspective or general.
+    // FIXME add new flags as more matrix types are supported.
+    kPersp_Matrix_Flag           = 0b10000, // GrFP::sampleUsage()::fHasPerspective
 };
 
 GrPrimitiveProcessor::GrPrimitiveProcessor(ClassID classID) : GrProcessor(classID) {}
@@ -24,23 +32,30 @@ const GrPrimitiveProcessor::TextureSampler& GrPrimitiveProcessor::textureSampler
     return this->onTextureSampler(i);
 }
 
-uint32_t
-GrPrimitiveProcessor::getTransformKey(const SkTArray<const GrCoordTransform*, true>& coords,
-                                      int numCoords) const {
-    uint32_t totalKey = 0;
-    for (int t = 0; t < numCoords; ++t) {
-        uint32_t key = 0;
-        const GrCoordTransform* coordTransform = coords[t];
-        if (coordTransform->getMatrix().hasPerspective()) {
-            key |= kGeneral_MatrixType;
-        } else {
-            key |= kNoPersp_MatrixType;
-        }
-        key <<= t;
-        SkASSERT(0 == (totalKey & key)); // keys for each transform ought not to overlap
-        totalKey |= key;
+uint32_t GrPrimitiveProcessor::computeCoordTransformsKey(const GrFragmentProcessor& fp) const {
+    // This is highly coupled with the code in GrGLSLGeometryProcessor::collectTransforms().
+
+    uint32_t key = 0;
+    if (fp.isSampledWithExplicitCoords()) {
+        key |= kExplicitlySampled_Flag;
     }
-    return totalKey;
+
+    switch(fp.sampleUsage().fKind) {
+        case SkSL::SampleUsage::Kind::kNone:
+            key |= kNone_SampleMatrix_Flag;
+            break;
+        case SkSL::SampleUsage::Kind::kUniform:
+            key |= kUniform_SampleMatrix_Flag;
+            break;
+        case SkSL::SampleUsage::Kind::kVariable:
+            key |= kVariable_SampleMatrix_Flag;
+            break;
+    }
+    if (fp.sampleUsage().fHasPerspective) {
+        key |= kPersp_Matrix_Flag;
+    }
+
+    return key;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -48,45 +63,23 @@ GrPrimitiveProcessor::getTransformKey(const SkTArray<const GrCoordTransform*, tr
 static inline GrSamplerState::Filter clamp_filter(GrTextureType type,
                                                   GrSamplerState::Filter requestedFilter) {
     if (GrTextureTypeHasRestrictedSampling(type)) {
-        return SkTMin(requestedFilter, GrSamplerState::Filter::kBilerp);
+        return std::min(requestedFilter, GrSamplerState::Filter::kLinear);
     }
     return requestedFilter;
 }
 
-GrPrimitiveProcessor::TextureSampler::TextureSampler(GrTextureType textureType,
-                                                     GrPixelConfig config,
-                                                     const GrSamplerState& samplerState,
-                                                     uint32_t extraSamplerKey) {
-    this->reset(textureType, config, samplerState, extraSamplerKey);
+GrPrimitiveProcessor::TextureSampler::TextureSampler(GrSamplerState samplerState,
+                                                     const GrBackendFormat& backendFormat,
+                                                     const GrSwizzle& swizzle) {
+    this->reset(samplerState, backendFormat, swizzle);
 }
 
-GrPrimitiveProcessor::TextureSampler::TextureSampler(GrTextureType textureType,
-                                                     GrPixelConfig config,
-                                                     GrSamplerState::Filter filterMode,
-                                                     GrSamplerState::WrapMode wrapXAndY) {
-    this->reset(textureType, config, filterMode, wrapXAndY);
-}
-
-void GrPrimitiveProcessor::TextureSampler::reset(GrTextureType textureType,
-                                                 GrPixelConfig config,
-                                                 const GrSamplerState& samplerState,
-                                                 uint32_t extraSamplerKey) {
-    SkASSERT(kUnknown_GrPixelConfig != config);
+void GrPrimitiveProcessor::TextureSampler::reset(GrSamplerState samplerState,
+                                                 const GrBackendFormat& backendFormat,
+                                                 const GrSwizzle& swizzle) {
     fSamplerState = samplerState;
-    fSamplerState.setFilterMode(clamp_filter(textureType, samplerState.filter()));
-    fTextureType = textureType;
-    fConfig = config;
-    fExtraSamplerKey = extraSamplerKey;
-    SkASSERT(!fExtraSamplerKey || textureType == GrTextureType::kExternal);
-}
-
-void GrPrimitiveProcessor::TextureSampler::reset(GrTextureType textureType,
-                                                 GrPixelConfig config,
-                                                 GrSamplerState::Filter filterMode,
-                                                 GrSamplerState::WrapMode wrapXAndY) {
-    SkASSERT(kUnknown_GrPixelConfig != config);
-    filterMode = clamp_filter(textureType, filterMode);
-    fSamplerState = GrSamplerState(wrapXAndY, filterMode);
-    fTextureType = textureType;
-    fConfig = config;
+    fSamplerState.setFilterMode(clamp_filter(backendFormat.textureType(), samplerState.filter()));
+    fBackendFormat = backendFormat;
+    fSwizzle = swizzle;
+    fIsInitialized = true;
 }

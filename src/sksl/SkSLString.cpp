@@ -5,9 +5,9 @@
  * found in the LICENSE file.
  */
 
-#include "SkSLString.h"
+#include "src/sksl/SkSLString.h"
 
-#include "SkSLUtil.h"
+#include "src/sksl/SkSLUtil.h"
 #include <algorithm>
 #include <errno.h>
 #include <limits.h>
@@ -26,7 +26,6 @@ String String::printf(const char* fmt, ...) {
     return result;
 }
 
-#ifdef SKSL_USE_STD_STRING
 void String::appendf(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
@@ -34,77 +33,44 @@ void String::appendf(const char* fmt, ...) {
     va_end(args);
 }
 
-void String::reset() {
-    this->clear();
-}
-
-int String::findLastOf(const char c) const {
-    // Rely on find_last_of and remap the output
-    size_t index = this->find_last_of(c);
-    return (index == std::string::npos ? -1 : index);
-}
-#endif
-
 void String::vappendf(const char* fmt, va_list args) {
-#ifdef SKSL_BUILD_FOR_WIN
-    #define VSNPRINTF    _vsnprintf
-#else
-    #define VSNPRINTF    vsnprintf
-#endif
     #define BUFFER_SIZE 256
     char buffer[BUFFER_SIZE];
     va_list reuse;
     va_copy(reuse, args);
-    size_t size = VSNPRINTF(buffer, BUFFER_SIZE, fmt, args);
-    if (BUFFER_SIZE >= size) {
+    size_t size = vsnprintf(buffer, BUFFER_SIZE, fmt, args);
+    if (BUFFER_SIZE >= size + 1) {
         this->append(buffer, size);
     } else {
         auto newBuffer = std::unique_ptr<char[]>(new char[size + 1]);
-        VSNPRINTF(newBuffer.get(), size + 1, fmt, reuse);
+        vsnprintf(newBuffer.get(), size + 1, fmt, reuse);
         this->append(newBuffer.get(), size);
     }
     va_end(reuse);
 }
 
-
-bool String::startsWith(const char* s) const {
-    return !strncmp(c_str(), s, strlen(s));
+bool StringFragment::startsWith(const char prefix[]) const {
+    return !strncmp(fChars, prefix, strlen(prefix));
 }
 
-bool String::endsWith(const char* s) const {
-    size_t len = strlen(s);
-    if (size() < len) {
+bool StringFragment::endsWith(const char suffix[]) const {
+    size_t suffixLength = strlen(suffix);
+    if (fLength < suffixLength) {
         return false;
     }
-    return !strncmp(c_str() + size() - len, s, len);
+    return !strncmp(fChars + fLength - suffixLength, suffix, suffixLength);
 }
 
-int String::find(const String& substring, int fromPos) const {
-    return find(substring.c_str(), fromPos);
-}
-
-int String::find(const char* substring, int fromPos) const {
-    SkASSERT(fromPos >= 0);
-#ifdef SKSL_USE_STD_STRING
-    // use std::string find() and check it against npos for not found, and find() natively supports
-    // searching from a position
-    size_t found = INHERITED::find(substring, (size_t) fromPos);
-    return found == std::string::npos ? -1 : found;
-#else
-    // use SkStrFind on the underlying c string, and pointer arithmetic to support the searching
-    // position
-    if (substring == nullptr) {
-        // Treat null as empty, and an empty string shows up immediately
-        return 0;
+bool String::consumeSuffix(const char suffix[]) {
+    size_t suffixLength = strlen(suffix);
+    if (this->length() < suffixLength) {
+        return false;
     }
-
-    size_t sublen = strlen(substring);
-    if (fromPos >= size() - sublen) {
-        // Can't find it if there aren't enough characters left
-        return -1;
+    if (0 != strncmp(this->data() + this->size() - suffixLength, suffix, suffixLength)) {
+        return false;
     }
-    return SkStrFind(c_str() + fromPos, substring);
-#endif
+    this->resize(this->length() - suffixLength);
+    return true;
 }
 
 String String::operator+(const char* s) const {
@@ -215,6 +181,18 @@ bool StringFragment::operator<(StringFragment other) const {
     return fLength < other.fLength;
 }
 
+String StringFragment::operator+(const char* other) const {
+    return String(*this) + other;
+}
+
+String StringFragment::operator+(const StringFragment& other) const {
+    return String(*this) + other;
+}
+
+String StringFragment::operator+(const String& other) const {
+    return String(*this) + other;
+}
+
 bool operator==(const char* s1, StringFragment s2) {
     return s2 == s1;
 }
@@ -263,16 +241,16 @@ String to_string(double value) {
     return String(buffer.str().c_str());
 }
 
-int stoi(const String& s) {
+SKSL_INT stoi(const String& s) {
     char* p;
     SkDEBUGCODE(errno = 0;)
     long result = strtoul(s.c_str(), &p, 0);
     SkASSERT(*p == 0);
     SkASSERT(!errno);
-    return (int) result;
+    return result;
 }
 
-double stod(const String& s) {
+SKSL_FLOAT stod(const String& s) {
     double result;
     std::string str(s.c_str(), s.size());
     std::stringstream buffer(str);
@@ -291,4 +269,4 @@ long stol(const String& s) {
     return result;
 }
 
-} // namespace
+}  // namespace SkSL

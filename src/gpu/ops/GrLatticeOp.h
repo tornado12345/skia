@@ -9,8 +9,8 @@
 #define GLatticeOp_DEFINED
 
 #include <memory>
-#include "GrSamplerState.h"
-#include "SkRefCnt.h"
+#include "include/core/SkRefCnt.h"
+#include "src/gpu/GrSamplerState.h"
 
 class GrColorSpaceXform;
 class GrDrawOp;
@@ -22,14 +22,15 @@ class SkMatrix;
 struct SkRect;
 
 namespace GrLatticeOp {
-std::unique_ptr<GrDrawOp> MakeNonAA(GrRecordingContext*,
-                                    GrPaint&&,
-                                    const SkMatrix& viewMatrix,
-                                    sk_sp<GrTextureProxy>,
-                                    sk_sp<GrColorSpaceXform>,
-                                    GrSamplerState::Filter,
-                                    std::unique_ptr<SkLatticeIter>,
-                                    const SkRect& dst);
-};
+GrOp::Owner MakeNonAA(GrRecordingContext*,
+                      GrPaint&&,
+                      const SkMatrix& viewMatrix,
+                      GrSurfaceProxyView view,
+                      SkAlphaType alphaType,
+                      sk_sp<GrColorSpaceXform>,
+                      GrSamplerState::Filter,
+                      std::unique_ptr<SkLatticeIter>,
+                      const SkRect& dst);
+}  // namespace GrLatticeOp
 
 #endif

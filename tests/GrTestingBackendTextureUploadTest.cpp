@@ -5,81 +5,102 @@
  * found in the LICENSE file.
  */
 
-#include "SkTypes.h"
+#include "include/gpu/GrDirectContext.h"
+#include "src/core/SkAutoPixmapStorage.h"
+#include "src/gpu/GrDirectContextPriv.h"
+#include "src/gpu/GrImageInfo.h"
+#include "src/gpu/GrProxyProvider.h"
+#include "src/gpu/GrSurfaceContext.h"
+#include "tests/Test.h"
+#include "tests/TestUtils.h"
 
-#include "GrGpu.h"
-#include "GrContextPriv.h"
-#include "GrTexture.h"
-#include "SkConvertPixels.h"
-#include "Test.h"
-#include "TestUtils.h"
-
-void testing_only_texture_test(skiatest::Reporter* reporter, GrContext* context, GrColorType ct,
-                               bool renderTarget, bool doDataUpload, GrMipMapped mipMapped) {
+static void testing_only_texture_test(skiatest::Reporter* reporter, GrDirectContext* dContext,
+                                      SkColorType ct, GrRenderable renderable, bool doDataUpload,
+                                      GrMipmapped mipMapped) {
     const int kWidth = 16;
     const int kHeight = 16;
-    SkAutoTMalloc<GrColor> srcBuffer;
+
+    SkImageInfo ii = SkImageInfo::Make(kWidth, kHeight, ct, kPremul_SkAlphaType);
+
+    SkAutoPixmapStorage expectedPixels, actualPixels;
+    expectedPixels.alloc(ii);
+    actualPixels.alloc(ii);
+
+    const GrCaps* caps = dContext->priv().caps();
+
+    GrColorType grCT = SkColorTypeToGrColorType(ct);
+
+    GrBackendFormat backendFormat = dContext->defaultBackendFormat(ct, renderable);
+    if (!backendFormat.isValid()) {
+        return;
+    }
+
+    GrBackendTexture backendTex;
+
     if (doDataUpload) {
-        srcBuffer.reset(kWidth * kHeight);
-        fill_pixel_data(kWidth, kHeight, srcBuffer.get());
-    }
-    SkAutoTMalloc<GrColor> dstBuffer(kWidth * kHeight);
+        SkASSERT(GrMipmapped::kNo == mipMapped);
 
-    GrGpu* gpu = context->priv().getGpu();
+        FillPixelData(kWidth, kHeight, expectedPixels.writable_addr32(0, 0));
 
-    GrPixelConfig config = GrColorTypeToPixelConfig(ct, GrSRGBEncoded::kNo);
-    if (!gpu->caps()->isConfigTexturable(config)) {
-        return;
-    }
-    if (gpu->caps()->supportedReadPixelsColorType(config, ct) != ct) {
-        return;
-    }
+        backendTex = dContext->createBackendTexture(&expectedPixels, 1,
+                                                    renderable, GrProtected::kNo);
+    } else {
+        backendTex = dContext->createBackendTexture(kWidth, kHeight, ct, SkColors::kTransparent,
+                                                    mipMapped, renderable, GrProtected::kNo);
 
-    GrBackendTexture backendTex = gpu->createTestingOnlyBackendTexture(srcBuffer,
-                                                                       kWidth,
-                                                                       kHeight,
-                                                                       ct,
-                                                                       renderTarget,
-                                                                       mipMapped);
+        size_t allocSize = SkAutoPixmapStorage::AllocSize(ii, nullptr);
+        // createBackendTexture will fill the texture with 0's if no data is provided, so
+        // we set the expected result likewise.
+        memset(expectedPixels.writable_addr32(0, 0), 0, allocSize);
+    }
     if (!backendTex.isValid()) {
         return;
     }
+    // skbug.com/9165
+    auto supportedRead =
+            caps->supportedReadPixelsColorType(grCT, backendTex.getBackendFormat(), grCT);
+    if (supportedRead.fColorType != grCT) {
+        return;
+    }
 
-    sk_sp<GrTexture> wrappedTex;
-    if (renderTarget) {
-        wrappedTex = gpu->wrapRenderableBackendTexture(
-                backendTex, 1, GrWrapOwnership::kAdopt_GrWrapOwnership, GrWrapCacheable::kNo);
+    sk_sp<GrTextureProxy> wrappedProxy;
+    if (GrRenderable::kYes == renderable) {
+        wrappedProxy = dContext->priv().proxyProvider()->wrapRenderableBackendTexture(
+                backendTex, 1, kAdopt_GrWrapOwnership, GrWrapCacheable::kNo, nullptr);
     } else {
-        wrappedTex = gpu->wrapBackendTexture(backendTex, GrWrapOwnership::kAdopt_GrWrapOwnership,
-                                             GrWrapCacheable::kNo, kRead_GrIOType);
+        wrappedProxy = dContext->priv().proxyProvider()->wrapBackendTexture(
+                backendTex, kAdopt_GrWrapOwnership, GrWrapCacheable::kNo, GrIOType::kRW_GrIOType);
     }
-    REPORTER_ASSERT(reporter, wrappedTex);
+    REPORTER_ASSERT(reporter, wrappedProxy);
 
-    int rowBytes = GrColorTypeBytesPerPixel(ct) * kWidth;
-    bool result = gpu->readPixels(wrappedTex.get(), 0, 0, kWidth,
-                                  kHeight, ct, dstBuffer, rowBytes);
+    GrSwizzle swizzle = dContext->priv().caps()->getReadSwizzle(wrappedProxy->backendFormat(),
+                                                                grCT);
+    GrSurfaceProxyView view(std::move(wrappedProxy), kTopLeft_GrSurfaceOrigin, swizzle);
+    auto surfaceContext = GrSurfaceContext::Make(dContext, std::move(view), grCT,
+                                                 kPremul_SkAlphaType, nullptr);
+    REPORTER_ASSERT(reporter, surfaceContext);
 
-    if (!doDataUpload) {
-        // createTestingOnlyBackendTexture will fill the texture with 0's if no data is provided, so
-        // we set the expected result likewise.
-        srcBuffer.reset(kWidth * kHeight);
-        memset(srcBuffer, 0, kWidth * kHeight * sizeof(GrColor));
-    }
+    bool result = surfaceContext->readPixels(dContext,
+                                             {grCT, kPremul_SkAlphaType, nullptr, kWidth, kHeight},
+                                             actualPixels.writable_addr(), actualPixels.rowBytes(),
+                                             {0, 0});
+
     REPORTER_ASSERT(reporter, result);
-    REPORTER_ASSERT(reporter, does_full_buffer_contain_correct_color(srcBuffer, dstBuffer,
-                                                                     kWidth, kHeight));
+    REPORTER_ASSERT(reporter,
+                    DoesFullBufferContainCorrectColor(expectedPixels.addr32(),
+                                                      actualPixels.addr32(), kWidth, kHeight));
 }
 
 DEF_GPUTEST_FOR_RENDERING_CONTEXTS(GrTestingBackendTextureUploadTest, reporter, ctxInfo) {
-    for (auto colorType: { GrColorType::kRGBA_8888, GrColorType::kBGRA_8888 }) {
-        for (bool renderable: {true, false}) {
+    for (auto colorType: { kRGBA_8888_SkColorType, kBGRA_8888_SkColorType }) {
+        for (auto renderable: { GrRenderable::kYes, GrRenderable::kNo }) {
             for (bool doDataUpload: {true, false}) {
-                testing_only_texture_test(reporter, ctxInfo.grContext(), colorType,
-                                          renderable, doDataUpload, GrMipMapped::kNo);
+                testing_only_texture_test(reporter, ctxInfo.directContext(), colorType,
+                                          renderable, doDataUpload, GrMipmapped::kNo);
 
                 if (!doDataUpload) {
-                    testing_only_texture_test(reporter, ctxInfo.grContext(), colorType,
-                                              renderable, doDataUpload, GrMipMapped::kYes);
+                    testing_only_texture_test(reporter, ctxInfo.directContext(), colorType,
+                                              renderable, doDataUpload, GrMipmapped::kYes);
                 }
             }
         }

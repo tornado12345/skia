@@ -5,19 +5,22 @@
  * found in the LICENSE file.
  */
 
-#include "Sample.h"
-#include "SkAnimTimer.h"
-#include "SkColor.h"
-#include "SkRandom.h"
-#include "SkRRect.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkPathBuilder.h"
+#include "include/core/SkRRect.h"
+#include "include/private/SkTPin.h"
+#include "include/utils/SkRandom.h"
+#include "samplecode/Sample.h"
+#include "tools/timer/TimeUtils.h"
 
-#include "SkSGColor.h"
-#include "SkSGDraw.h"
-#include "SkSGGroup.h"
-#include "SkSGPath.h"
-#include "SkSGRect.h"
-#include "SkSGScene.h"
-#include "SkSGTransform.h"
+#include "modules/sksg/include/SkSGDraw.h"
+#include "modules/sksg/include/SkSGGroup.h"
+#include "modules/sksg/include/SkSGInvalidationController.h"
+#include "modules/sksg/include/SkSGPaint.h"
+#include "modules/sksg/include/SkSGPath.h"
+#include "modules/sksg/include/SkSGRect.h"
+#include "modules/sksg/include/SkSGScene.h"
+#include "modules/sksg/include/SkSGTransform.h"
 
 namespace {
 
@@ -73,7 +76,7 @@ void update_pos(const sk_sp<sksg::RRect>& rr, const SkPoint& pos) {
     rr->setRRect(rr->getRRect().makeOffset(offsetX, offsetY));
 }
 
-} // anonymous ns
+}  // namespace
 
 class PongView final : public Sample {
 public:
@@ -101,20 +104,20 @@ protected:
                             SkVector::Make(0, 0));
 
         // Background decoration.
-        SkPath bgPath;
-        bgPath.moveTo(kBounds.left() , fieldBounds.top());
-        bgPath.lineTo(kBounds.right(), fieldBounds.top());
-        bgPath.moveTo(kBounds.left() , fieldBounds.bottom());
-        bgPath.lineTo(kBounds.right(), fieldBounds.bottom());
+        SkPathBuilder bgPath;
+        bgPath.moveTo(kBounds.left() , fieldBounds.top())
+              .lineTo(kBounds.right(), fieldBounds.top())
+              .moveTo(kBounds.left() , fieldBounds.bottom())
+              .lineTo(kBounds.right(), fieldBounds.bottom());
         // TODO: stroke-dash support would come in handy right about now.
         for (uint32_t i = 0; i < kBackgroundDashCount; ++i) {
             bgPath.moveTo(kBounds.centerX(),
-                          kBounds.top() + (i + 0.25f) * kBounds.height() / kBackgroundDashCount);
-            bgPath.lineTo(kBounds.centerX(),
+                          kBounds.top() + (i + 0.25f) * kBounds.height() / kBackgroundDashCount)
+                  .lineTo(kBounds.centerX(),
                           kBounds.top() + (i + 0.75f) * kBounds.height() / kBackgroundDashCount);
         }
 
-        auto bg_path  = sksg::Path::Make(bgPath);
+        auto bg_path  = sksg::Path::Make(bgPath.detach());
         auto bg_paint = sksg::Color::Make(SK_ColorBLACK);
         bg_paint->setStyle(SkPaint::kStroke_Style);
         bg_paint->setStrokeWidth(kBackgroundStroke);
@@ -145,20 +148,15 @@ protected:
                                      SkRect::MakeIWH(this->width(), this->height()),
                                      SkMatrix::kFill_ScaleToFit));
         auto root = sksg::TransformEffect::Make(std::move(group), fContentMatrix);
-        fScene = sksg::Scene::Make(std::move(root), sksg::AnimatorList());
+        fScene = sksg::Scene::Make(std::move(root));
 
         // Off we go.
         this->updatePaddleStrategy();
     }
 
-    bool onQuery(Event* evt) override {
-        if (Sample::TitleQ(*evt)) {
-            Sample::TitleR(evt, "SGPong");
-            return true;
-        }
+    SkString name() override { return SkString("SGPong"); }
 
-        SkUnichar uni;
-        if (Sample::CharQ(*evt, &uni)) {
+    bool onChar(SkUnichar uni) override {
             switch (uni) {
                 case '[':
                     fTimeScale = SkTPin(fTimeScale - 0.1f, kTimeScaleMin, kTimeScaleMax);
@@ -168,13 +166,11 @@ protected:
                     return true;
                 case 'I':
                     fShowInval = !fShowInval;
-                    fScene->setShowInval(fShowInval);
                     return true;
                 default:
                     break;
             }
-        }
-        return this->INHERITED::onQuery(evt);
+            return false;
     }
 
     void onSizeChange() override {
@@ -189,14 +185,29 @@ protected:
     }
 
     void onDrawContent(SkCanvas* canvas) override {
+        sksg::InvalidationController ic;
         fScene->render(canvas);
+
+        if (fShowInval) {
+            SkPaint fill, stroke;
+            fill.setAntiAlias(true);
+            fill.setColor(0x40ff0000);
+            stroke.setAntiAlias(true);
+            stroke.setColor(0xffff0000);
+            stroke.setStyle(SkPaint::kStroke_Style);
+
+            for (const auto& r : ic) {
+                canvas->drawRect(r, fill);
+                canvas->drawRect(r, stroke);
+            }
+        }
     }
 
-    bool onAnimate(const SkAnimTimer& timer) override {
+    bool onAnimate(double nanos) override {
         // onAnimate may fire before the first draw.
         if (fScene) {
-            SkScalar dt = (timer.msec() - fLastTick) * fTimeScale;
-            fLastTick = timer.msec();
+            SkScalar dt = (TimeUtils::NanosToMSec(nanos) - fLastTick) * fTimeScale;
+            fLastTick = TimeUtils::NanosToMSec(nanos);
 
             fPaddle0.posTick(dt);
             fPaddle1.posTick(dt);
@@ -292,7 +303,7 @@ private:
     SkScalar                      fTimeScale = 1.0f;
     bool                          fShowInval = false;
 
-    typedef Sample INHERITED;
+    using INHERITED = Sample;
 };
 
 DEF_SAMPLE( return new PongView(); )

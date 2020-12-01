@@ -5,12 +5,14 @@
  * found in the LICENSE file.
  */
 
-#include "SkDOM.h"
+#include "src/xml/SkDOM.h"
 
-#include "SkStream.h"
-#include "SkTo.h"
-#include "SkXMLParser.h"
-#include "SkXMLWriter.h"
+#include <memory>
+
+#include "include/core/SkStream.h"
+#include "include/private/SkTo.h"
+#include "src/xml/SkXMLParser.h"
+#include "src/xml/SkXMLWriter.h"
 
 bool SkXMLParser::parse(const SkDOM& dom, const SkDOMNode* node) {
     const char* elemName = dom.getName(node);
@@ -174,8 +176,8 @@ const char* SkDOM::AttrIter::next(const char** value) {
 
 //////////////////////////////////////////////////////////////////////////////
 
-#include "SkXMLParser.h"
-#include "SkTDArray.h"
+#include "include/private/SkTDArray.h"
+#include "src/xml/SkXMLParser.h"
 
 static char* dupstr(SkArenaAlloc* chunk, const char src[]) {
     SkASSERT(chunk && src);
@@ -187,7 +189,7 @@ static char* dupstr(SkArenaAlloc* chunk, const char src[]) {
 
 class SkDOMParser : public SkXMLParser {
 public:
-    SkDOMParser(SkArenaAlloc* chunk) : SkXMLParser(&fParserError), fAlloc(chunk) {
+    SkDOMParser(SkArenaAllocWithReset* chunk) : SkXMLParser(&fParserError), fAlloc(chunk) {
         fAlloc->reset();
         fRoot = nullptr;
         fLevel = 0;
@@ -281,7 +283,7 @@ private:
     }
 
     SkTDArray<SkDOM::Node*> fParentStack;
-    SkArenaAlloc*           fAlloc;
+    SkArenaAllocWithReset*  fAlloc;
     SkDOM::Node*            fRoot;
     bool                    fNeedToFlush;
 
@@ -344,7 +346,7 @@ const SkDOM::Node* SkDOM::copy(const SkDOM& dom, const SkDOM::Node* node) {
 
 SkXMLParser* SkDOM::beginParsing() {
     SkASSERT(!fParser);
-    fParser.reset(new SkDOMParser(&fAlloc));
+    fParser = std::make_unique<SkDOMParser>(&fAlloc);
 
     return fParser.get();
 }
@@ -372,7 +374,7 @@ int SkDOM::countChildren(const Node* node, const char elem[]) const {
 
 //////////////////////////////////////////////////////////////////////////
 
-#include "SkParse.h"
+#include "include/utils/SkParse.h"
 
 bool SkDOM::findS32(const Node* node, const char name[], int32_t* value) const {
     const char* vstr = this->findAttr(node, name);

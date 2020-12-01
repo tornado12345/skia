@@ -5,28 +5,48 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
+#include "gm/gm.h"
+#include "include/core/SkBlendMode.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkColorFilter.h"
+#include "include/core/SkFilterQuality.h"
+#include "include/core/SkImage.h"
+#include "include/core/SkImageInfo.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkPoint.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkRefCnt.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkShader.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/core/SkSurface.h"
+#include "include/core/SkTileMode.h"
+#include "include/core/SkTypes.h"
+#include "include/effects/SkGradientShader.h"
+#include "tools/ToolUtils.h"
 
 #include <algorithm>
-#include "SkGradientShader.h"
-#include "SkSurface.h"
-#include "sk_tool_utils.h"
+#include <initializer_list>
+#include <utility>
 
 // Makes a set of m x n tiled images to be drawn with SkCanvas::experimental_drawImageSetV1().
 static void make_image_tiles(int tileW, int tileH, int m, int n, const SkColor colors[4],
-                             SkCanvas::ImageSetEntry set[]) {
+                             SkCanvas::ImageSetEntry set[], const SkColor bgColor=SK_ColorLTGRAY) {
     const int w = tileW * m;
     const int h = tileH * n;
     auto surf = SkSurface::MakeRaster(
             SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType));
-    surf->getCanvas()->clear(SK_ColorLTGRAY);
+    surf->getCanvas()->clear(bgColor);
 
     static constexpr SkScalar kStripeW = 10;
     static constexpr SkScalar kStripeSpacing = 30;
     SkPaint paint;
 
     SkPoint pts1[] = {{0.f, 0.f}, {(SkScalar)w, (SkScalar)h}};
-    auto grad = SkGradientShader::MakeLinear(pts1, colors, nullptr, 2, SkShader::kClamp_TileMode);
+    auto grad = SkGradientShader::MakeLinear(pts1, colors, nullptr, 2, SkTileMode::kClamp);
     paint.setShader(std::move(grad));
     paint.setAntiAlias(true);
     paint.setStyle(SkPaint::kStroke_Style);
@@ -39,7 +59,7 @@ static void make_image_tiles(int tileW, int tileH, int m, int n, const SkColor c
     }
 
     SkPoint pts2[] = {{0.f, (SkScalar)h}, {(SkScalar)w, 0.f}};
-    grad = SkGradientShader::MakeLinear(pts2, colors + 2, nullptr, 2, SkShader::kClamp_TileMode);
+    grad = SkGradientShader::MakeLinear(pts2, colors + 2, nullptr, 2, SkTileMode::kClamp);
     paint.setShader(std::move(grad));
     paint.setBlendMode(SkBlendMode::kMultiply);
     stripePts[0] = {-w - kStripeW, h + kStripeW};
@@ -85,8 +105,8 @@ namespace skiagm {
 
 class DrawImageSetGM : public GM {
 private:
-    SkString onShortName() final { return SkString("draw_image_set"); }
-    SkISize onISize() override { return SkISize::Make(1000, 725); }
+    SkString onShortName() override { return SkString("draw_image_set"); }
+    SkISize onISize() override { return {1000, 725}; }
     void onOnceBeforeDraw() override {
         static constexpr SkColor kColors[] = {SK_ColorCYAN,    SK_ColorBLACK,
                                               SK_ColorMAGENTA, SK_ColorBLACK};
@@ -121,6 +141,10 @@ private:
         SkAssertResult(matrices[3].setPolyToPoly(src, dst, 4));
         matrices[3].postTranslate(100.f, d);
         for (auto fm : {kNone_SkFilterQuality, kLow_SkFilterQuality}) {
+            SkPaint setPaint;
+            setPaint.setFilterQuality(fm);
+            setPaint.setBlendMode(SkBlendMode::kSrcOver);
+
             for (size_t m = 0; m < SK_ARRAY_COUNT(matrices); ++m) {
                 // Draw grid of red lines at interior tile boundaries.
                 static constexpr SkScalar kLineOutset = 10.f;
@@ -145,20 +169,29 @@ private:
                 }
                 canvas->save();
                 canvas->concat(matrices[m]);
-                canvas->experimental_DrawImageSetV1(fSet, kM * kN, fm, SkBlendMode::kSrcOver);
+                canvas->experimental_DrawEdgeAAImageSet(fSet, kM * kN, nullptr, nullptr, &setPaint,
+                                                        SkCanvas::kFast_SrcRectConstraint);
                 canvas->restore();
             }
             // A more exotic case with an unusual blend mode, mixed aa flags set, and alpha,
-            // subsets the image
+            // subsets the image. And another with all the above plus a color filter.
             SkCanvas::ImageSetEntry entry;
             entry.fSrcRect = SkRect::MakeWH(kTileW, kTileH).makeInset(kTileW / 4.f, kTileH / 4.f);
-            entry.fDstRect = SkRect::MakeWH(2 * kTileW, 2 * kTileH).makeOffset(d / 4, 2 * d);
+            entry.fDstRect = SkRect::MakeWH(1.5 * kTileW, 1.5 * kTileH).makeOffset(d / 4, 2 * d);
             entry.fImage = fSet[0].fImage;
             entry.fAlpha = 0.7f;
             entry.fAAFlags = SkCanvas::kLeft_QuadAAFlag | SkCanvas::kTop_QuadAAFlag;
             canvas->save();
             canvas->rotate(3.f);
-            canvas->experimental_DrawImageSetV1(&entry, 1, fm, SkBlendMode::kExclusion);
+
+            setPaint.setBlendMode(SkBlendMode::kExclusion);
+            canvas->experimental_DrawEdgeAAImageSet(&entry, 1, nullptr, nullptr, &setPaint,
+                                                    SkCanvas::kFast_SrcRectConstraint);
+            canvas->translate(entry.fDstRect.width() + 8.f, 0);
+            SkPaint cfPaint = setPaint;
+            cfPaint.setColorFilter(SkColorFilters::LinearToSRGBGamma());
+            canvas->experimental_DrawEdgeAAImageSet(&entry, 1, nullptr, nullptr, &cfPaint,
+                                                    SkCanvas::kFast_SrcRectConstraint);
             canvas->restore();
             canvas->translate(2 * d, 0);
         }
@@ -174,8 +207,8 @@ private:
 // incorrectly disabled.
 class DrawImageSetRectToRectGM : public GM {
 private:
-    SkString onShortName() final { return SkString("draw_image_set_rect_to_rect"); }
-    SkISize onISize() override { return SkISize::Make(1250, 850); }
+    SkString onShortName() override { return SkString("draw_image_set_rect_to_rect"); }
+    SkISize onISize() override { return {1250, 850}; }
     void onOnceBeforeDraw() override {
         static constexpr SkColor kColors[] = {SK_ColorBLUE, SK_ColorWHITE,
                                               SK_ColorRED,  SK_ColorWHITE};
@@ -183,7 +216,7 @@ private:
     }
 
     void onDraw(SkCanvas* canvas) override {
-        sk_tool_utils::draw_checkerboard(canvas, SK_ColorBLACK, SK_ColorWHITE, 50);
+        ToolUtils::draw_checkerboard(canvas, SK_ColorBLACK, SK_ColorWHITE, 50);
         static constexpr SkScalar kW = kM * kTileW;
         static constexpr SkScalar kH = kN * kTileH;
         SkMatrix matrices[5];
@@ -202,7 +235,11 @@ private:
         matrices[4].postRotate(90, kW / 2.f, kH / 2.f);
         matrices[4].postScale(2.f, 0.5f);
 
-        static constexpr SkScalar kTranslate = SkTMax(kW, kH) * 2.f + 10.f;
+        SkPaint paint;
+        paint.setFilterQuality(kLow_SkFilterQuality);
+        paint.setBlendMode(SkBlendMode::kSrcOver);
+
+        static constexpr SkScalar kTranslate = std::max(kW, kH) * 2.f + 10.f;
         canvas->translate(5.f, 5.f);
         canvas->save();
         for (SkScalar frac : {0.f, 0.5f}) {
@@ -211,8 +248,8 @@ private:
             for (size_t m = 0; m < SK_ARRAY_COUNT(matrices); ++m) {
                 canvas->save();
                 canvas->concat(matrices[m]);
-                canvas->experimental_DrawImageSetV1(fSet, kM * kN, kLow_SkFilterQuality,
-                                                    SkBlendMode::kSrcOver);
+                canvas->experimental_DrawEdgeAAImageSet(fSet, kM * kN, nullptr, nullptr, &paint,
+                                                        SkCanvas::kFast_SrcRectConstraint);
                 canvas->restore();
                 canvas->translate(kTranslate, 0);
             }
@@ -234,8 +271,8 @@ private:
             for (size_t m = 0; m < SK_ARRAY_COUNT(matrices); ++m) {
                 canvas->save();
                 canvas->concat(matrices[m]);
-                canvas->experimental_DrawImageSetV1(scaledSet, kM * kN, kLow_SkFilterQuality,
-                                                    SkBlendMode::kSrcOver);
+                canvas->experimental_DrawEdgeAAImageSet(scaledSet, kM * kN, nullptr, nullptr,
+                                                        &paint, SkCanvas::kFast_SrcRectConstraint);
                 canvas->restore();
                 canvas->translate(kTranslate, 0);
             }
@@ -251,7 +288,69 @@ private:
     SkCanvas::ImageSetEntry fSet[kM * kN];
 };
 
+// This GM exercises alpha-only and color textures being combined correctly with the paint's color.
+class DrawImageSetAlphaOnlyGM : public GM {
+private:
+    SkString onShortName() override { return SkString("draw_image_set_alpha_only"); }
+    SkISize onISize() override { return {kM*kTileW, 2*kN*kTileH}; }
+
+    DrawResult onGpuSetup(GrDirectContext* direct, SkString*) override {
+        static constexpr SkColor kColors[] = {SK_ColorBLUE, SK_ColorTRANSPARENT,
+                                              SK_ColorRED,  SK_ColorTRANSPARENT};
+        static constexpr SkColor kBGColor = SkColorSetARGB(128, 128, 128, 128);
+        make_image_tiles(kTileW, kTileH, kM, kN, kColors, fSet, kBGColor);
+
+        // Modify the alpha of the entries, decreasing by column, and convert even rows to
+        // alpha-only textures.
+        sk_sp<SkColorSpace> alphaSpace = SkColorSpace::MakeSRGB();
+        for (int y = 0; y < kN; ++y) {
+            for (int x = 0; x < kM; ++x) {
+                int i = y * kM + x;
+                fSet[i].fAlpha = (kM - x) / (float) kM;
+                if (y % 2 == 0) {
+                    fSet[i].fImage = fSet[i].fImage->makeColorTypeAndColorSpace(
+                            kAlpha_8_SkColorType, alphaSpace, direct);
+                }
+            }
+        }
+        return skiagm::DrawResult::kOk;
+    }
+
+    void onDraw(SkCanvas* canvas) override {
+        ToolUtils::draw_checkerboard(canvas, SK_ColorGRAY, SK_ColorDKGRAY, 25);
+
+        SkPaint paint;
+        paint.setFilterQuality(kLow_SkFilterQuality);
+        paint.setBlendMode(SkBlendMode::kSrcOver);
+        paint.setColor4f({0.2f, 0.8f, 0.4f, 1.f}); // colorizes even rows, no effect on odd rows
+
+        // Top rows use experimental edge set API
+        canvas->experimental_DrawEdgeAAImageSet(fSet, kM * kN, nullptr, nullptr, &paint,
+                                                SkCanvas::kFast_SrcRectConstraint);
+
+        canvas->translate(0.f, kN * kTileH);
+
+        // Bottom rows draw each image from the set using the regular API
+        for (int y = 0; y < kN; ++y) {
+            for (int x = 0; x < kM; ++x) {
+                int i = y * kM + x;
+                SkPaint entryPaint = paint;
+                entryPaint.setAlphaf(fSet[i].fAlpha * paint.getAlphaf());
+                canvas->drawImageRect(fSet[i].fImage.get(), fSet[i].fSrcRect, fSet[i].fDstRect,
+                                      &entryPaint, SkCanvas::kFast_SrcRectConstraint);
+            }
+        }
+    }
+
+    static constexpr int kM = 4;
+    static constexpr int kN = 4;
+    static constexpr int kTileW = 50;
+    static constexpr int kTileH = 50;
+    SkCanvas::ImageSetEntry fSet[kM * kN];
+};
+
 DEF_GM(return new DrawImageSetGM();)
 DEF_GM(return new DrawImageSetRectToRectGM();)
+DEF_GM(return new DrawImageSetAlphaOnlyGM();)
 
 }  // namespace skiagm

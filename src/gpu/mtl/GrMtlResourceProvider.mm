@@ -5,44 +5,67 @@
  * found in the LICENSE file.
  */
 
-#include "GrMtlResourceProvider.h"
+#include "src/gpu/mtl/GrMtlResourceProvider.h"
 
-#include "GrMtlCopyManager.h"
-#include "GrMtlGpu.h"
-#include "GrMtlPipelineState.h"
-#include "GrMtlUtil.h"
+#include "include/gpu/GrContextOptions.h"
+#include "include/gpu/GrDirectContext.h"
+#include "src/gpu/GrDirectContextPriv.h"
+#include "src/gpu/mtl/GrMtlCommandBuffer.h"
+#include "src/gpu/mtl/GrMtlGpu.h"
+#include "src/gpu/mtl/GrMtlPipelineState.h"
+#include "src/gpu/mtl/GrMtlUtil.h"
 
-#include "SkSLCompiler.h"
+#include "src/sksl/SkSLCompiler.h"
 
+#if !__has_feature(objc_arc)
+#error This file must be compiled with Arc. Use -fobjc-arc flag
+#endif
 
 GrMtlResourceProvider::GrMtlResourceProvider(GrMtlGpu* gpu)
     : fGpu(gpu) {
     fPipelineStateCache.reset(new PipelineStateCache(gpu));
 }
 
-GrMtlCopyPipelineState* GrMtlResourceProvider::findOrCreateCopyPipelineState(
-        MTLPixelFormat dstPixelFormat,
-        id<MTLFunction> vertexFunction,
-        id<MTLFunction> fragmentFunction,
-        MTLVertexDescriptor* vertexDescriptor) {
-
-    for (const auto& copyPipelineState: fCopyPipelineStateCache) {
-        if (GrMtlCopyManager::IsCompatible(copyPipelineState.get(), dstPixelFormat)) {
-            return copyPipelineState.get();
-        }
-    }
-
-    fCopyPipelineStateCache.emplace_back(GrMtlCopyPipelineState::CreateCopyPipelineState(
-             fGpu, dstPixelFormat, vertexFunction, fragmentFunction, vertexDescriptor));
-    return fCopyPipelineStateCache.back().get();
+GrMtlPipelineState* GrMtlResourceProvider::findOrCreateCompatiblePipelineState(
+        GrRenderTarget* renderTarget,
+        const GrProgramInfo& programInfo) {
+    return fPipelineStateCache->refPipelineState(renderTarget, programInfo);
 }
 
-GrMtlPipelineState* GrMtlResourceProvider::findOrCreateCompatiblePipelineState(
-        GrRenderTarget* renderTarget, GrSurfaceOrigin origin,
-        const GrPipeline& pipeline, const GrPrimitiveProcessor& proc,
-        const GrTextureProxy* const primProcProxies[], GrPrimitiveType primType) {
-    return fPipelineStateCache->refPipelineState(renderTarget, origin, proc, primProcProxies,
-                                                 pipeline, primType);
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+GrMtlDepthStencil* GrMtlResourceProvider::findOrCreateCompatibleDepthStencilState(
+        const GrStencilSettings& stencil, GrSurfaceOrigin origin) {
+    GrMtlDepthStencil* depthStencilState;
+    GrMtlDepthStencil::Key key = GrMtlDepthStencil::GenerateKey(stencil, origin);
+    depthStencilState = fDepthStencilStates.find(key);
+    if (!depthStencilState) {
+        depthStencilState = GrMtlDepthStencil::Create(fGpu, stencil, origin);
+        fDepthStencilStates.add(depthStencilState);
+    }
+    SkASSERT(depthStencilState);
+    return depthStencilState;
+}
+
+GrMtlSampler* GrMtlResourceProvider::findOrCreateCompatibleSampler(GrSamplerState params) {
+    GrMtlSampler* sampler;
+    sampler = fSamplers.find(GrMtlSampler::GenerateKey(params));
+    if (!sampler) {
+        sampler = GrMtlSampler::Create(fGpu, params);
+        fSamplers.add(sampler);
+    }
+    SkASSERT(sampler);
+    return sampler;
+}
+
+void GrMtlResourceProvider::destroyResources() {
+    fSamplers.foreach([&](GrMtlSampler* sampler) { sampler->unref(); });
+    fSamplers.reset();
+
+    fDepthStencilStates.foreach([&](GrMtlDepthStencil* stencil) { stencil->unref(); });
+    fDepthStencilStates.reset();
+
+    fPipelineStateCache->release();
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -62,7 +85,7 @@ struct GrMtlResourceProvider::PipelineStateCache::Entry {
 };
 
 GrMtlResourceProvider::PipelineStateCache::PipelineStateCache(GrMtlGpu* gpu)
-    : fMap(kMaxEntries)
+    : fMap(gpu->getContext()->priv().options().fRuntimeProgramCacheSize)
     , fGpu(gpu)
 #ifdef GR_PIPELINE_STATE_CACHE_STATS
     , fTotalRequests(0)
@@ -71,8 +94,7 @@ GrMtlResourceProvider::PipelineStateCache::PipelineStateCache(GrMtlGpu* gpu)
 {}
 
 GrMtlResourceProvider::PipelineStateCache::~PipelineStateCache() {
-    // TODO: determine if we need abandon/release methods
-    fMap.reset();
+    SkASSERT(0 == fMap.count());
     // dump stats
 #ifdef GR_PIPELINE_STATE_CACHE_STATS
     if (c_DisplayMtlPipelineCache) {
@@ -87,37 +109,33 @@ GrMtlResourceProvider::PipelineStateCache::~PipelineStateCache() {
 #endif
 }
 
+void GrMtlResourceProvider::PipelineStateCache::release() {
+    fMap.reset();
+}
+
 GrMtlPipelineState* GrMtlResourceProvider::PipelineStateCache::refPipelineState(
         GrRenderTarget* renderTarget,
-        GrSurfaceOrigin origin,
-        const GrPrimitiveProcessor& primProc,
-        const GrTextureProxy* const primProcProxies[],
-        const GrPipeline& pipeline,
-        GrPrimitiveType primType) {
+        const GrProgramInfo& programInfo) {
 #ifdef GR_PIPELINE_STATE_CACHE_STATS
     ++fTotalRequests;
 #endif
-    // Get GrMtlProgramDesc
-    GrMtlPipelineStateBuilder::Desc desc;
-    if (!GrMtlPipelineStateBuilder::Desc::Build(&desc, renderTarget, primProc, pipeline, primType,
-                                                fGpu)) {
+
+    const GrMtlCaps& caps = fGpu->mtlCaps();
+
+    GrProgramDesc desc = caps.makeDesc(renderTarget, programInfo);
+    if (!desc.isValid()) {
         GrCapsDebugf(fGpu->caps(), "Failed to build mtl program descriptor!\n");
         return nullptr;
     }
 
     std::unique_ptr<Entry>* entry = fMap.find(desc);
     if (!entry) {
-        // Didn't find an origin-independent version, check with the specific origin
-        desc.setSurfaceOriginKey(GrGLSLFragmentShaderBuilder::KeyForSurfaceOrigin(origin));
-        entry = fMap.find(desc);
-    }
-    if (!entry) {
 #ifdef GR_PIPELINE_STATE_CACHE_STATS
         ++fCacheMisses;
 #endif
         GrMtlPipelineState* pipelineState(GrMtlPipelineStateBuilder::CreatePipelineState(
-                fGpu, renderTarget, origin, primProc, primProcProxies, pipeline, &desc));
-        if (nullptr == pipelineState) {
+            fGpu, renderTarget, desc, programInfo));
+        if (!pipelineState) {
             return nullptr;
         }
         entry = fMap.insert(desc, std::unique_ptr<Entry>(new Entry(fGpu, pipelineState)));

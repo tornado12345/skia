@@ -8,10 +8,10 @@
 #ifndef SkAndroidCodec_DEFINED
 #define SkAndroidCodec_DEFINED
 
-#include "SkCodec.h"
-#include "SkEncodedImageFormat.h"
-#include "SkStream.h"
-#include "SkTypes.h"
+#include "include/codec/SkCodec.h"
+#include "include/core/SkEncodedImageFormat.h"
+#include "include/core/SkStream.h"
+#include "include/core/SkTypes.h"
 
 /**
  *  Abstract interface defining image codec functionality that is necessary for
@@ -74,6 +74,13 @@ public:
     virtual ~SkAndroidCodec();
 
     const SkImageInfo& getInfo() const { return fInfo; }
+
+    /**
+     * Return the ICC profile of the encoded data.
+     */
+    const skcms_ICCProfile* getICCProfile() const {
+        return fCodec->getEncodedInfo().profile();
+    }
 
     /**
      *  Format of the encoded data.
@@ -188,31 +195,11 @@ public:
     //        called SkAndroidCodec.  On the other hand, it's may be a bit confusing to call
     //        these Options when SkCodec has a slightly different set of Options.  Maybe these
     //        should be DecodeOptions or SamplingOptions?
-    struct AndroidOptions {
+    struct AndroidOptions : public SkCodec::Options {
         AndroidOptions()
-            : fZeroInitialized(SkCodec::kNo_ZeroInitialized)
-            , fSubset(nullptr)
+            : SkCodec::Options()
             , fSampleSize(1)
         {}
-
-        /**
-         *  Indicates is destination pixel memory is zero initialized.
-         *
-         *  The default is SkCodec::kNo_ZeroInitialized.
-         */
-        SkCodec::ZeroInitialized fZeroInitialized;
-
-        /**
-         *  If not NULL, represents a subset of the original image to decode.
-         *
-         *  Must be within the bounds returned by getInfo().
-         *
-         *  If the EncodedFormat is SkEncodedImageFormat::kWEBP, the top and left
-         *  values must be even.
-         *
-         *  The default is NULL, meaning a decode of the entire image.
-         */
-        SkIRect* fSubset;
 
         /**
          *  The client may provide an integer downscale factor for the decode.
@@ -283,5 +270,7 @@ private:
     const SkImageInfo               fInfo;
     const ExifOrientationBehavior   fOrientationBehavior;
     std::unique_ptr<SkCodec>        fCodec;
+
+    friend class SkAnimatedImage;
 };
 #endif // SkAndroidCodec_DEFINED

@@ -8,21 +8,21 @@
 #ifndef SkDeferredDisplayListRecorder_DEFINED
 #define SkDeferredDisplayListRecorder_DEFINED
 
-#include "../private/SkDeferredDisplayList.h"
-#include "SkImageInfo.h"
-#include "SkRefCnt.h"
-#include "SkSurfaceCharacterization.h"
-#include "SkTypes.h"
+#include "include/core/SkDeferredDisplayList.h"
+#include "include/core/SkImageInfo.h"
+#include "include/core/SkRefCnt.h"
+#include "include/core/SkSurfaceCharacterization.h"
+#include "include/core/SkTypes.h"
 
 class GrBackendFormat;
 class GrBackendTexture;
-class GrContext;
+class GrRecordingContext;
+class GrYUVABackendTextureInfo;
 class SkCanvas;
 class SkImage;
 class SkPromiseImageTexture;
 class SkSurface;
 struct SkYUVAIndex;
-struct SkYUVASizeInfo;
 
 /*
  * This class is intended to be used as:
@@ -50,89 +50,76 @@ public:
     // Note: ownership of the SkCanvas is not transferred via this call.
     SkCanvas* getCanvas();
 
-    std::unique_ptr<SkDeferredDisplayList> detach();
+    sk_sp<SkDeferredDisplayList> detach();
 
     using PromiseImageTextureContext = void*;
     using PromiseImageTextureFulfillProc =
             sk_sp<SkPromiseImageTexture> (*)(PromiseImageTextureContext);
     using PromiseImageTextureReleaseProc = void (*)(PromiseImageTextureContext);
-    using PromiseImageTextureDoneProc = void (*)(PromiseImageTextureContext);
 
     /**
-        Create a new SkImage that is very similar to an SkImage created by MakeFromTexture. The main
-        difference is that the client doesn't have the backend texture on the gpu yet but they know
-        all the properties of the texture. So instead of passing in a GrBackendTexture the client
-        supplies a GrBackendFormat, width, height, and GrMipMapped state.
+        Create a new SkImage that is very similar to an SkImage created by MakeFromTexture. The
+        difference is that the caller need not have created the texture nor populated it with the
+        image pixel data. Moreover, the SkImage may be created on a thread as the creation of the
+        image does not require access to the backend API or GrContext. Instead of passing a
+        GrBackendTexture the client supplies a description of the texture consisting of
+        GrBackendFormat, width, height, and GrMipmapped state. The resulting SkImage can be drawn
+        to a SkDeferredDisplayListRecorder or directly to a GPU-backed SkSurface.
 
-        When we actually send the draw calls to the GPU, we will call the textureFulfillProc and
-        the client will return a GrBackendTexture to us. The properties of the GrBackendTexture must
-        match those set during the SkImage creation, and it must have a valid backend gpu texture.
-        The gpu texture supplied by the client must stay valid until we call the textureReleaseProc.
+        When the actual texture is required to perform a backend API draw, textureFulfillProc will
+        be called to receive a GrBackendTexture. The properties of the GrBackendTexture must match
+        those set during the SkImage creation, and it must refer to a valid existing texture in the
+        backend API context/device, and be populated with the image pixel data. The texture cannot
+        be deleted until textureReleaseProc is called.
 
-        When all the following are true:
-            * the promise image is deleted,
-            * any SkDeferredDisplayLists that recorded draws referencing the image are deleted,
-            * and the texture is safe to delete in the underlying API with respect to drawn
-              SkDeferredDisplayLists that reference the image
-        the textureReleaseProc and then textureDoneProc are called. The texture can be deleted
-        by the client as soon as textureReleaseProc is called. There is at most one call to each of
-        textureFulfillProc, textureReleaseProc, and textureDoneProc. textureDoneProc is always
-        called even if image creation fails or if the image is never fulfilled (e.g. it is never
-        drawn). If textureFulfillProc is called then textureReleaseProc will always be called even
-        if textureFulfillProc fails.
+        There is at most one call to each of textureFulfillProc and textureReleaseProc.
+        textureReleaseProc is always called even if image creation fails or if the
+        image is never fulfilled (e.g. it is never drawn or all draws are clipped out)
 
-
-        This call is only valid if the SkDeferredDisplayListRecorder is backed by a gpu context.
+        This call is only valid if the SkDeferredDisplayListRecorder is backed by a GPU context.
 
         @param backendFormat       format of promised gpu texture
         @param width               width of promised gpu texture
         @param height              height of promised gpu texture
         @param mipMapped           mip mapped state of promised gpu texture
-        @param origin              one of: kBottomLeft_GrSurfaceOrigin, kTopLeft_GrSurfaceOrigin
-        @param colorType           one of: kUnknown_SkColorType, kAlpha_8_SkColorType,
-                                   kRGB_565_SkColorType, kARGB_4444_SkColorType,
-                                   kRGBA_8888_SkColorType, kBGRA_8888_SkColorType,
-                                   kGray_8_SkColorType, kRGBA_F16_SkColorType
-        @param alphaType           one of: kUnknown_SkAlphaType, kOpaque_SkAlphaType,
-                                   kPremul_SkAlphaType, kUnpremul_SkAlphaType
         @param colorSpace          range of colors; may be nullptr
         @param textureFulfillProc  function called to get actual gpu texture
-        @param textureReleaseProc  function called when texture can be released
-        @param promiseDoneProc     function called when we will no longer call textureFulfillProc
+        @param textureReleaseProc  function called when texture can be deleted
         @param textureContext      state passed to textureFulfillProc and textureReleaseProc
+        @param version             controls when textureReleaseProc is called
         @return                    created SkImage, or nullptr
      */
     sk_sp<SkImage> makePromiseTexture(const GrBackendFormat& backendFormat,
                                       int width,
                                       int height,
-                                      GrMipMapped mipMapped,
+                                      GrMipmapped mipMapped,
                                       GrSurfaceOrigin origin,
                                       SkColorType colorType,
                                       SkAlphaType alphaType,
                                       sk_sp<SkColorSpace> colorSpace,
                                       PromiseImageTextureFulfillProc textureFulfillProc,
                                       PromiseImageTextureReleaseProc textureReleaseProc,
-                                      PromiseImageTextureDoneProc textureDoneProc,
                                       PromiseImageTextureContext textureContext);
 
     /**
-        This entry point operates the same as 'makePromiseTexture' except that its
-        textureFulfillProc can be called up to four times to fetch the required YUVA
-        planes (passing a different textureContext to each call). So, if the 'yuvaIndices'
-        indicate that only the first two backend textures are used, 'textureFulfillProc' will
-        be called with the first two 'textureContexts'.
+        This entry point operates like 'makePromiseTexture' but it is used to construct a SkImage
+        from YUV[A] data. The source data may be planar (i.e. spread across multiple textures). In
+        the extreme Y, U, V, and A are all in different planes and thus the image is specified by
+        four textures. 'yuvaBackendTextureInfo' describes the planar arrangement, texture formats,
+        conversion to RGB, and origin of the textures. Separate 'textureFulfillProc' and
+        'textureReleaseProc' calls are made for each texture. Each texture has its own
+        PromiseImageTextureContext. If 'yuvaBackendTextureinfo' is not valid then no release proc
+        calls are made. Otherwise, the calls will be made even on failure. 'textureContexts' has one
+        entry for each of the up to four textures, as indicated by 'yuvaBackendTextureinfo'.
+
+        Currently the mip mapped property of 'yuvaBackendTextureInfo' is ignored. However, in the
+        near future it will be required that if it is kYes then textureFulfillProc must return
+        a mip mapped texture for each plane in order to successfully draw the image.
      */
-    sk_sp<SkImage> makeYUVAPromiseTexture(SkYUVColorSpace yuvColorSpace,
-                                          const GrBackendFormat yuvaFormats[],
-                                          const SkISize yuvaSizes[],
-                                          const SkYUVAIndex yuvaIndices[4],
-                                          int imageWidth,
-                                          int imageHeight,
-                                          GrSurfaceOrigin imageOrigin,
+    sk_sp<SkImage> makeYUVAPromiseTexture(const GrYUVABackendTextureInfo& yuvaBackendTextureInfo,
                                           sk_sp<SkColorSpace> imageColorSpace,
                                           PromiseImageTextureFulfillProc textureFulfillProc,
                                           PromiseImageTextureReleaseProc textureReleaseProc,
-                                          PromiseImageTextureDoneProc textureDoneProc,
                                           PromiseImageTextureContext textureContexts[]);
 
 private:
@@ -141,7 +128,8 @@ private:
     const SkSurfaceCharacterization             fCharacterization;
 
 #if SK_SUPPORT_GPU
-    sk_sp<GrContext>                            fContext;
+    sk_sp<GrRecordingContext>                   fContext;
+    sk_sp<GrRenderTargetProxy>                  fTargetProxy;
     sk_sp<SkDeferredDisplayList::LazyProxyData> fLazyProxyData;
     sk_sp<SkSurface>                            fSurface;
 #endif

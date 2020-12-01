@@ -5,12 +5,18 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
-#include "SkCanvas.h"
-#include "SkPath.h"
-#include "SkRandom.h"
-#include "SkScalar.h"
-#include "SkTArray.h"
+#include "gm/gm.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkPathBuilder.h"
+#include "include/core/SkPoint.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/core/SkTypes.h"
+#include "include/private/SkTArray.h"
+#include "include/utils/SkRandom.h"
 
 namespace skiagm {
 
@@ -68,13 +74,15 @@ protected:
 
         SkASSERT(SK_ARRAY_COUNT(pgs) == kNumPolygons);
         for (size_t pgIndex = 0; pgIndex < SK_ARRAY_COUNT(pgs); ++pgIndex) {
-            fPolygons.push_back().moveTo(pgs[pgIndex].fPoints[0].fX,
-                                         pgs[pgIndex].fPoints[0].fY);
+            SkPathBuilder b;
+            b.moveTo(pgs[pgIndex].fPoints[0].fX,
+                     pgs[pgIndex].fPoints[0].fY);
             for (size_t ptIndex = 1; ptIndex < pgs[pgIndex].fPointNum; ++ptIndex) {
-                fPolygons.back().lineTo(pgs[pgIndex].fPoints[ptIndex].fX,
-                                        pgs[pgIndex].fPoints[ptIndex].fY);
+                b.lineTo(pgs[pgIndex].fPoints[ptIndex].fX,
+                         pgs[pgIndex].fPoints[ptIndex].fY);
             }
-            fPolygons.back().close();
+            b.close();
+            fPolygons.push_back(b.detach());
         }
     }
 
@@ -159,11 +167,11 @@ private:
     static constexpr int kNumJoins = 3;
 
     SkTArray<SkPath> fPolygons;
-    typedef GM INHERITED;
+    using INHERITED = GM;
 };
 
 //////////////////////////////////////////////////////////////////////////////
 
 DEF_GM(return new PolygonsGM;)
 
-}
+}  // namespace skiagm

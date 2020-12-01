@@ -8,22 +8,23 @@
 #ifndef SkRecords_DEFINED
 #define SkRecords_DEFINED
 
-#include "SkData.h"
-#include "SkCanvas.h"
-#include "SkDrawable.h"
-#include "SkDrawShadowInfo.h"
-#include "SkImage.h"
-#include "SkImageFilter.h"
-#include "SkMatrix.h"
-#include "SkPath.h"
-#include "SkPicture.h"
-#include "SkRect.h"
-#include "SkRegion.h"
-#include "SkRRect.h"
-#include "SkRSXform.h"
-#include "SkString.h"
-#include "SkTextBlob.h"
-#include "SkVertices.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkData.h"
+#include "include/core/SkDrawable.h"
+#include "include/core/SkImage.h"
+#include "include/core/SkImageFilter.h"
+#include "include/core/SkM44.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkPath.h"
+#include "include/core/SkPicture.h"
+#include "include/core/SkRRect.h"
+#include "include/core/SkRSXform.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkRegion.h"
+#include "include/core/SkString.h"
+#include "include/core/SkTextBlob.h"
+#include "include/core/SkVertices.h"
+#include "src/core/SkDrawShadowInfo.h"
 
 namespace SkRecords {
 
@@ -44,22 +45,27 @@ namespace SkRecords {
     M(Save)                                                         \
     M(SaveLayer)                                                    \
     M(SaveBehind)                                                   \
+    M(MarkCTM)                                                      \
     M(SetMatrix)                                                    \
+    M(SetM44)                                                       \
     M(Translate)                                                    \
+    M(Scale)                                                        \
     M(Concat)                                                       \
+    M(Concat44)                                                     \
     M(ClipPath)                                                     \
     M(ClipRRect)                                                    \
     M(ClipRect)                                                     \
     M(ClipRegion)                                                   \
+    M(ClipShader)                                                   \
     M(DrawArc)                                                      \
     M(DrawDrawable)                                                 \
     M(DrawImage)                                                    \
     M(DrawImageLattice)                                             \
     M(DrawImageRect)                                                \
     M(DrawImageNine)                                                \
-    M(DrawImageSet)                                                 \
     M(DrawDRRect)                                                   \
     M(DrawOval)                                                     \
+    M(DrawBehind)                                                   \
     M(DrawPaint)                                                    \
     M(DrawPath)                                                     \
     M(DrawPatch)                                                    \
@@ -67,13 +73,15 @@ namespace SkRecords {
     M(DrawPoints)                                                   \
     M(DrawRRect)                                                    \
     M(DrawRect)                                                     \
-    M(DrawEdgeAARect)                                               \
     M(DrawRegion)                                                   \
     M(DrawTextBlob)                                                 \
     M(DrawAtlas)                                                    \
     M(DrawVertices)                                                 \
     M(DrawShadowRec)                                                \
-    M(DrawAnnotation)
+    M(DrawAnnotation)                                               \
+    M(DrawEdgeAAQuad)                                               \
+    M(DrawEdgeAAImageSet)
+
 
 // Defines SkRecords::Type, an enum of all record types.
 #define ENUM(T) T##_Type,
@@ -86,7 +94,7 @@ enum Type { SK_RECORD_TYPES(ENUM) };
 
 // An Optional doesn't own the pointer's memory, but may need to destroy non-POD data.
 template <typename T>
-class Optional : SkNoncopyable {
+class Optional {
 public:
     Optional() : fPtr(nullptr) {}
     Optional(T* ptr) : fPtr(ptr) {}
@@ -98,23 +106,8 @@ public:
     ACT_AS_PTR(fPtr)
 private:
     T* fPtr;
-};
-
-// Like Optional, but ptr must not be NULL.
-template <typename T>
-class Adopted : SkNoncopyable {
-public:
-    Adopted(T* ptr) : fPtr(ptr) { SkASSERT(fPtr); }
-    Adopted(Adopted* source) {
-        // Transfer ownership from source to this.
-        fPtr = source->fPtr;
-        source->fPtr = NULL;
-    }
-    ~Adopted() { if (fPtr) fPtr->~T(); }
-
-    ACT_AS_PTR(fPtr)
-private:
-    T* fPtr;
+    Optional(const Optional&) = delete;
+    Optional& operator=(const Optional&) = delete;
 };
 
 // PODArray doesn't own the pointer's memory, and we assume the data is POD.
@@ -174,21 +167,29 @@ RECORD(SaveLayer, kHasPaint_Tag,
        Optional<SkRect> bounds;
        Optional<SkPaint> paint;
        sk_sp<const SkImageFilter> backdrop;
-       sk_sp<const SkImage> clipMask;
-       Optional<SkMatrix> clipMatrix;
        SkCanvas::SaveLayerFlags saveLayerFlags);
 
 RECORD(SaveBehind, 0,
        Optional<SkRect> subset);
 
+RECORD(MarkCTM, 0,
+       SkString name);
 RECORD(SetMatrix, 0,
         TypedMatrix matrix);
+RECORD(SetM44, 0,
+        SkM44 matrix);
 RECORD(Concat, 0,
         TypedMatrix matrix);
+RECORD(Concat44, 0,
+       SkM44 matrix);
 
 RECORD(Translate, 0,
         SkScalar dx;
         SkScalar dy);
+
+RECORD(Scale, 0,
+       SkScalar sx;
+       SkScalar sy);
 
 struct ClipOpAndAA {
     ClipOpAndAA() {}
@@ -214,6 +215,9 @@ RECORD(ClipRect, 0,
         ClipOpAndAA opAA);
 RECORD(ClipRegion, 0,
         SkRegion region;
+        SkClipOp op);
+RECORD(ClipShader, 0,
+        sk_sp<SkShader> shader;
         SkClipOp op);
 
 // While not strictly required, if you have an SkPaint, it's fastest to put it first.
@@ -259,16 +263,13 @@ RECORD(DrawImageNine, kDraw_Tag|kHasImage_Tag|kHasPaint_Tag,
         sk_sp<const SkImage> image;
         SkIRect center;
         SkRect dst);
-RECORD(DrawImageSet, kDraw_Tag|kHasImage_Tag,
-       SkAutoTArray<SkCanvas::ImageSetEntry> set;
-       int count;
-       SkFilterQuality quality;
-       SkBlendMode mode);
 RECORD(DrawOval, kDraw_Tag|kHasPaint_Tag,
         SkPaint paint;
         SkRect oval);
 RECORD(DrawPaint, kDraw_Tag|kHasPaint_Tag,
         SkPaint paint);
+RECORD(DrawBehind, kDraw_Tag|kHasPaint_Tag,
+       SkPaint paint);
 RECORD(DrawPath, kDraw_Tag|kHasPaint_Tag,
         SkPaint paint;
         PreCachedPath path);
@@ -280,18 +281,13 @@ RECORD(DrawPoints, kDraw_Tag|kHasPaint_Tag,
         SkPaint paint;
         SkCanvas::PointMode mode;
         unsigned count;
-        SkPoint* pts);
+        PODArray<SkPoint> pts);
 RECORD(DrawRRect, kDraw_Tag|kHasPaint_Tag,
         SkPaint paint;
         SkRRect rrect);
 RECORD(DrawRect, kDraw_Tag|kHasPaint_Tag,
         SkPaint paint;
         SkRect rect);
-RECORD(DrawEdgeAARect, kDraw_Tag,
-       SkRect rect;
-       SkCanvas::QuadAAFlags aa;
-       SkColor color;
-       SkBlendMode mode);
 RECORD(DrawRegion, kDraw_Tag|kHasPaint_Tag,
         SkPaint paint;
         SkRegion region);
@@ -318,8 +314,6 @@ RECORD(DrawAtlas, kDraw_Tag|kHasImage_Tag|kHasPaint_Tag,
 RECORD(DrawVertices, kDraw_Tag|kHasPaint_Tag,
         SkPaint paint;
         sk_sp<SkVertices> vertices;
-        PODArray<SkVertices::Bone> bones;
-        int boneCount;
         SkBlendMode bmode);
 RECORD(DrawShadowRec, kDraw_Tag,
        PreCachedPath path;
@@ -328,6 +322,19 @@ RECORD(DrawAnnotation, 0,  // TODO: kDraw_Tag, skia:5548
        SkRect rect;
        SkString key;
        sk_sp<SkData> value);
+RECORD(DrawEdgeAAQuad, kDraw_Tag,
+       SkRect rect;
+       PODArray<SkPoint> clip;
+       SkCanvas::QuadAAFlags aa;
+       SkColor4f color;
+       SkBlendMode mode);
+RECORD(DrawEdgeAAImageSet, kDraw_Tag|kHasImage_Tag|kHasPaint_Tag,
+       Optional<SkPaint> paint;
+       SkAutoTArray<SkCanvas::ImageSetEntry> set;
+       int count;
+       PODArray<SkPoint> dstClips;
+       PODArray<SkMatrix> preViewMatrices;
+       SkCanvas::SrcRectConstraint constraint);
 #undef RECORD
 
 }  // namespace SkRecords

@@ -5,20 +5,47 @@
  * found in the LICENSE file.
  */
 
-#include "SkColorFilterImageFilter.h"
+#include "include/effects/SkColorFilterImageFilter.h"
 
-#include "SkCanvas.h"
-#include "SkColorFilter.h"
-#include "SkColorSpaceXformer.h"
-#include "SkImageFilterPriv.h"
-#include "SkReadBuffer.h"
-#include "SkSpecialImage.h"
-#include "SkSpecialSurface.h"
-#include "SkWriteBuffer.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColorFilter.h"
+#include "src/core/SkColorFilterBase.h"
+#include "src/core/SkImageFilter_Base.h"
+#include "src/core/SkReadBuffer.h"
+#include "src/core/SkSpecialImage.h"
+#include "src/core/SkSpecialSurface.h"
+#include "src/core/SkWriteBuffer.h"
+
+namespace {
+
+class SkColorFilterImageFilterImpl final : public SkImageFilter_Base {
+public:
+    SkColorFilterImageFilterImpl(sk_sp<SkColorFilter> cf, sk_sp<SkImageFilter> input,
+                                 const CropRect* cropRect)
+            : INHERITED(&input, 1, cropRect)
+            , fColorFilter(std::move(cf)) {}
+
+protected:
+    void flatten(SkWriteBuffer&) const override;
+    sk_sp<SkSpecialImage> onFilterImage(const Context&, SkIPoint* offset) const override;
+    bool onIsColorFilterNode(SkColorFilter**) const override;
+    bool onCanHandleComplexCTM() const override { return true; }
+    bool affectsTransparentBlack() const override;
+
+private:
+    friend void SkColorFilterImageFilter::RegisterFlattenables();
+    SK_FLATTENABLE_HOOKS(SkColorFilterImageFilterImpl)
+
+    sk_sp<SkColorFilter> fColorFilter;
+
+    using INHERITED = SkImageFilter_Base;
+};
+
+} // end namespace
 
 sk_sp<SkImageFilter> SkColorFilterImageFilter::Make(sk_sp<SkColorFilter> cf,
                                                     sk_sp<SkImageFilter> input,
-                                                    const CropRect* cropRect) {
+                                                    const SkImageFilter::CropRect* cropRect) {
     if (!cf) {
         return nullptr;
     }
@@ -29,43 +56,41 @@ sk_sp<SkImageFilter> SkColorFilterImageFilter::Make(sk_sp<SkColorFilter> cf,
         // colorfilters into a single one, which the new imagefilter will wrap.
         sk_sp<SkColorFilter> newCF = cf->makeComposed(sk_sp<SkColorFilter>(inputCF));
         if (newCF) {
-            return sk_sp<SkImageFilter>(new SkColorFilterImageFilter(std::move(newCF),
-                                                                     sk_ref_sp(input->getInput(0)),
-                                                                     cropRect));
+            return sk_sp<SkImageFilter>(new SkColorFilterImageFilterImpl(
+                    std::move(newCF), sk_ref_sp(input->getInput(0)), cropRect));
         }
     }
 
-    return sk_sp<SkImageFilter>(new SkColorFilterImageFilter(std::move(cf),
-                                                             std::move(input),
-                                                             cropRect));
+    return sk_sp<SkImageFilter>(new SkColorFilterImageFilterImpl(
+            std::move(cf), std::move(input), cropRect));
 }
 
-SkColorFilterImageFilter::SkColorFilterImageFilter(sk_sp<SkColorFilter> cf,
-                                                   sk_sp<SkImageFilter> input,
-                                                   const CropRect* cropRect)
-    : INHERITED(&input, 1, cropRect)
-    , fColorFilter(std::move(cf)) {
+void SkColorFilterImageFilter::RegisterFlattenables() {
+    SK_REGISTER_FLATTENABLE(SkColorFilterImageFilterImpl);
+    // TODO (michaelludwig) - Remove after grace period for SKPs to stop using old name
+    SkFlattenable::Register("SkColorFilterImageFilter", SkColorFilterImageFilterImpl::CreateProc);
 }
 
-sk_sp<SkFlattenable> SkColorFilterImageFilter::CreateProc(SkReadBuffer& buffer) {
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+sk_sp<SkFlattenable> SkColorFilterImageFilterImpl::CreateProc(SkReadBuffer& buffer) {
     SK_IMAGEFILTER_UNFLATTEN_COMMON(common, 1);
     sk_sp<SkColorFilter> cf(buffer.readColorFilter());
-    return Make(std::move(cf), common.getInput(0), &common.cropRect());
+    return SkColorFilterImageFilter::Make(std::move(cf), common.getInput(0), &common.cropRect());
 }
 
-void SkColorFilterImageFilter::flatten(SkWriteBuffer& buffer) const {
+void SkColorFilterImageFilterImpl::flatten(SkWriteBuffer& buffer) const {
     this->INHERITED::flatten(buffer);
     buffer.writeFlattenable(fColorFilter.get());
 }
 
-sk_sp<SkSpecialImage> SkColorFilterImageFilter::onFilterImage(SkSpecialImage* source,
-                                                              const Context& ctx,
-                                                              SkIPoint* offset) const {
+sk_sp<SkSpecialImage> SkColorFilterImageFilterImpl::onFilterImage(const Context& ctx,
+                                                                  SkIPoint* offset) const {
     SkIPoint inputOffset = SkIPoint::Make(0, 0);
-    sk_sp<SkSpecialImage> input(this->filterInput(0, source, ctx, &inputOffset));
+    sk_sp<SkSpecialImage> input(this->filterInput(0, ctx, &inputOffset));
 
     SkIRect inputBounds;
-    if (fColorFilter->affectsTransparentBlack()) {
+    if (as_CFB(fColorFilter)->affectsTransparentBlack()) {
         // If the color filter affects transparent black, the bounds are the entire clip.
         inputBounds = ctx.clipBounds();
     } else if (!input) {
@@ -80,7 +105,7 @@ sk_sp<SkSpecialImage> SkColorFilterImageFilter::onFilterImage(SkSpecialImage* so
         return nullptr;
     }
 
-    sk_sp<SkSpecialSurface> surf(source->makeSurface(ctx.outputProperties(), bounds.size()));
+    sk_sp<SkSpecialSurface> surf(ctx.makeSurface(bounds.size()));
     if (!surf) {
         return nullptr;
     }
@@ -95,7 +120,7 @@ sk_sp<SkSpecialImage> SkColorFilterImageFilter::onFilterImage(SkSpecialImage* so
 
     // TODO: it may not be necessary to clear or drawPaint inside the input bounds
     // (see skbug.com/5075)
-    if (fColorFilter->affectsTransparentBlack()) {
+    if (as_CFB(fColorFilter)->affectsTransparentBlack()) {
         // The subsequent input->draw() call may not fill the entire canvas. For filters which
         // affect transparent black, ensure that the filter is applied everywhere.
         paint.setColor(SK_ColorTRANSPARENT);
@@ -117,20 +142,7 @@ sk_sp<SkSpecialImage> SkColorFilterImageFilter::onFilterImage(SkSpecialImage* so
     return surf->makeImageSnapshot();
 }
 
-sk_sp<SkImageFilter> SkColorFilterImageFilter::onMakeColorSpace(SkColorSpaceXformer* xformer)
-const {
-    SkASSERT(1 == this->countInputs());
-
-    sk_sp<SkImageFilter> input = xformer->apply(this->getInput(0));
-    auto colorFilter = xformer->apply(fColorFilter.get());
-    if (this->getInput(0) != input.get() || fColorFilter != colorFilter) {
-        return SkColorFilterImageFilter::Make(std::move(colorFilter), std::move(input),
-                                              this->getCropRectIfSet());
-    }
-    return this->refMe();
-}
-
-bool SkColorFilterImageFilter::onIsColorFilterNode(SkColorFilter** filter) const {
+bool SkColorFilterImageFilterImpl::onIsColorFilterNode(SkColorFilter** filter) const {
     SkASSERT(1 == this->countInputs());
     if (!this->cropRectIsSet()) {
         if (filter) {
@@ -141,6 +153,6 @@ bool SkColorFilterImageFilter::onIsColorFilterNode(SkColorFilter** filter) const
     return false;
 }
 
-bool SkColorFilterImageFilter::affectsTransparentBlack() const {
-    return fColorFilter->affectsTransparentBlack();
+bool SkColorFilterImageFilterImpl::affectsTransparentBlack() const {
+    return as_CFB(fColorFilter)->affectsTransparentBlack();
 }

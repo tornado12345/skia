@@ -14,6 +14,7 @@ DEPS = [
   'recipe_engine/context',
   'recipe_engine/file',
   'recipe_engine/path',
+  'recipe_engine/platform',
   'recipe_engine/properties',
   'recipe_engine/python',
   'recipe_engine/raw_io',
@@ -39,46 +40,69 @@ def _adb(api, title, *cmd, **kwargs):
 
 def skpbench_steps(api):
   """benchmark Skia using skpbench."""
+  is_vulkan = 'Vulkan' in api.vars.builder_name
+  is_android = 'Android' in api.vars.builder_name
+  is_ccpr = 'CCPR' in api.vars.builder_name
+  is_all_paths_volatile = 'AllPathsVolatile' in api.vars.builder_name
+  is_mskp = 'Mskp' in api.vars.builder_name
+  is_ddl = 'DDL' in api.vars.builder_name
+  is_9x9 = '9x9' in api.vars.builder_name
+
   api.file.ensure_directory(
       'makedirs perf_dir', api.flavor.host_dirs.perf_data_dir)
 
-  if 'Android' in api.vars.builder_name:
+  if is_android:
     app = api.vars.build_dir.join('skpbench')
     _adb(api, 'push skpbench', 'push', app, api.flavor.device_dirs.bin_dir)
 
-  skpbench_dir = api.vars.slave_dir.join('skia', 'tools', 'skpbench')
+  skpbench_dir = api.vars.workdir.join('skia', 'tools', 'skpbench')
   table = api.path.join(api.vars.swarming_out_dir, 'table')
 
-  if 'Vulkan' in api.vars.builder_name:
-    config = 'vk'
-  else:
-    config = 'gles'
+  config = 'vk' if is_vulkan else 'gles' if is_android else 'gl'
+  internal_samples = 4 if is_android else 8
+
+  if is_all_paths_volatile:
+    config = "%smsaa%i" % (config, internal_samples)
+
+  skpbench_invocation = api.path.join(api.flavor.device_dirs.bin_dir, 'skpbench')
+
+  # skbug.com/10184
+  if is_vulkan and 'GalaxyS20' in api.vars.builder_name:
+    skpbench_invocation = "LD_LIBRARY_PATH=/data/local/tmp %s" % skpbench_invocation
 
   skpbench_args = [
-        api.path.join(api.flavor.device_dirs.bin_dir, 'skpbench'),
+        skpbench_invocation,
         '--resultsfile', table,
         '--config', config,
+        '--internalSamples', str(internal_samples),
         # TODO(dogben): Track down what's causing bots to die.
         '-v5']
-  if 'DDL' in api.vars.builder_name:
-    # This adds the "--ddl" flag for both DDLTotal and DDLRecord
+  if is_ddl:
     skpbench_args += ['--ddl']
-    # disable the mask generation threads for sanity's sake in DDL mode
+    # disable the mask generation threads for simplicity's sake in DDL mode
     skpbench_args += ['--gpuThreads', '0']
-  if 'DDLRecord' in api.vars.builder_name:
-    skpbench_args += ['--ddlRecord']
-  if '9x9' in api.vars.builder_name:
+  if is_9x9:
     skpbench_args += [
-        '--ddlNumAdditionalThreads', 9,
+        '--ddlNumRecordingThreads', 9,
         '--ddlTilingWidthHeight', 3]
-  if 'Android' in api.vars.builder_name:
+  if is_android:
     skpbench_args += [
         '--adb',
         '--adb_binary', ADB_BINARY]
-  if 'CCPR' in api.vars.builder_name:
+  if is_ccpr:
     skpbench_args += [
-        '--pr', 'ccpr',
-        '--nocache',
+        '--pr', 'ccpr', '--cc', '--nocache',
+        api.path.join(api.flavor.device_dirs.skp_dir, 'desk_*svg.skp'),
+        api.path.join(api.flavor.device_dirs.skp_dir, 'desk_chalkboard.skp')]
+  elif is_mskp:
+    skpbench_args += [api.flavor.device_dirs.mskp_dir]
+  elif is_all_paths_volatile:
+    skpbench_args += [
+        # nvpr takes every path when enabled, which isn't always the best choice
+        # for volatile paths.
+        '--pr', '~nvpr',
+        '--allPathsVolatile',
+        '--suffix', "_volatile",
         api.path.join(api.flavor.device_dirs.skp_dir, 'desk_*svg.skp'),
         api.path.join(api.flavor.device_dirs.skp_dir, 'desk_chalkboard.skp')]
   else:
@@ -113,10 +137,9 @@ def skpbench_steps(api):
     '--outfile', json_path
   ])
 
-  keys_blacklist = ['configuration', 'role', 'is_trybot']
   skiaperf_args.append('--key')
   for k in sorted(api.vars.builder_cfg.keys()):
-    if not k in keys_blacklist:
+    if not k in ['configuration', 'role', 'is_trybot']:
       skiaperf_args.extend([k, api.vars.builder_cfg[k]])
 
   api.run(api.python, 'Parse skpbench output into Perf json',
@@ -127,10 +150,15 @@ def skpbench_steps(api):
 def RunSteps(api):
   api.vars.setup()
   api.file.ensure_directory('makedirs tmp_dir', api.vars.tmp_dir)
-  api.flavor.setup()
+
+  # The app_name passed to api.flavor.setup() is used to determine which app
+  # to install on an attached device. That work is done in skpbench_steps, so
+  # we pass None here.
+  api.flavor.setup(None)
 
   try:
-    api.flavor.install(skps=True)
+    mksp_mode = ('Mskp' in api.vars.builder_name)
+    api.flavor.install(skps=not mksp_mode, mskps=mksp_mode)
     skpbench_steps(api)
   finally:
     api.flavor.cleanup_steps()
@@ -139,12 +167,20 @@ def RunSteps(api):
 
 TEST_BUILDERS = [
   ('Perf-Android-Clang-Pixel-GPU-Adreno530-arm64-Release-All-'
+   'Android_Skpbench_Mskp'),
+  ('Perf-Android-Clang-Pixel-GPU-Adreno530-arm64-Release-All-'
    'Android_CCPR_Skpbench'),
+  ('Perf-Android-Clang-Pixel-GPU-Adreno530-arm64-Release-All-'
+   'Android_ReduceOpsTaskSplitting_Skpbench'),
+  ('Perf-Android-Clang-GalaxyS20-GPU-MaliG77-arm64-Release-All-'
+   'Android_AllPathsVolatile_Skpbench'),
+  ('Perf-Android-Clang-GalaxyS20-GPU-MaliG77-arm64-Release-All-'
+   'Android_Vulkan_AllPathsVolatile_Skpbench'),
   'Perf-Win10-Clang-Golo-GPU-QuadroP400-x86_64-Release-All-Vulkan_Skpbench',
   ('Perf-Win10-Clang-Golo-GPU-QuadroP400-x86_64-Release-All-'
    'Vulkan_Skpbench_DDLTotal_9x9'),
   ('Perf-Win10-Clang-Golo-GPU-QuadroP400-x86_64-Release-All-'
-   'Vulkan_Skpbench_DDLRecord_9x9'),
+   'AllPathsVolatile_Skpbench'),
 ]
 
 
@@ -166,7 +202,8 @@ def GenTests(api):
       api.step_data('get swarming task id',
           stdout=api.raw_io.output('123456'))
     )
-
+    if 'Win' in builder and not 'LenovoYogaC630' in builder:
+      test += api.platform('win', 64)
     yield test
 
   b = ('Perf-Android-Clang-Pixel2XL-GPU-Adreno540-arm64-Release-All-'

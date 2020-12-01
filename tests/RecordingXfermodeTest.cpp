@@ -5,15 +5,15 @@
  * found in the LICENSE file.
  */
 
-#include "Test.h"
+#include "tests/Test.h"
 
-#include "../include/core/SkBitmap.h"
-#include "../include/core/SkCanvas.h"
-#include "../include/core/SkPicture.h"
-#include "../include/core/SkStream.h"
-#include "../include/core/SkString.h"
-#include "../include/core/SkPictureRecorder.h"
-#include "../src/core/SkBlendModePriv.h"
+#include "include/core/SkBitmap.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkPicture.h"
+#include "include/core/SkPictureRecorder.h"
+#include "include/core/SkStream.h"
+#include "include/core/SkString.h"
+#include "src/core/SkBlendModePriv.h"
 
 #include <cstring>
 
@@ -160,7 +160,7 @@ DEF_TEST(SkRecordingAccuracyXfermode, reporter) {
         REPORTER_ASSERT(reporter,
                         0 == memcmp(goldenBM.getPixels(), pictureBM.getPixels(), pixelsSize));
 #else
-        if (memcmp(goldenBM.getPixels(), pictureBM.getPixels(), pixelsSize)) {
+        if (0 != memcmp(goldenBM.getPixels(), pictureBM.getPixels(), pixelsSize)) {
             numErrors++;
             errors.appendf("For SkXfermode %d %s:    SkPictureRecorder bitmap is wrong\n",
                            iMode, SkBlendMode_Name(mode));

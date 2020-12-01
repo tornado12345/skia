@@ -7,21 +7,23 @@
 
 // Despite the name and location, this is portable code.
 
-#include "SkFixed.h"
-#include "SkFontMgr.h"
-#include "SkFontMgr_android_parser.h"
-#include "SkMalloc.h"
-#include "SkOSFile.h"
-#include "SkStream.h"
-#include "SkTDArray.h"
-#include "SkTSearch.h"
-#include "SkTemplates.h"
-#include "SkTLogic.h"
+#include "include/core/SkFontMgr.h"
+#include "include/core/SkStream.h"
+#include "include/private/SkFixed.h"
+#include "include/private/SkMalloc.h"
+#include "include/private/SkTDArray.h"
+#include "include/private/SkTLogic.h"
+#include "include/private/SkTemplates.h"
+#include "src/core/SkOSFile.h"
+#include "src/core/SkTSearch.h"
+#include "src/ports/SkFontMgr_android_parser.h"
 
 #include <expat.h>
 
 #include <stdlib.h>
 #include <string.h>
+
+#include <memory>
 
 #define LMP_SYSTEM_FONTS_FILE "/system/etc/fonts.xml"
 #define OLD_SYSTEM_FONTS_FILE "/system/etc/system_fonts.xml"
@@ -395,7 +397,7 @@ static const TagHandler familySetHandler = {
     /*chars*/nullptr,
 };
 
-} // lmpParser
+}  // namespace lmpParser
 
 namespace jbParser {
 
@@ -405,7 +407,7 @@ static const TagHandler fileHandler = {
         // 'lang' (string) [default ""]
         // 'index' (non-negative integer) [default 0]
         // The character data should be a filename.
-        FontFamily& currentFamily = *self->fCurrentFamily.get();
+        FontFamily& currentFamily = *self->fCurrentFamily;
         FontFileInfo& newFileInfo = currentFamily.fFonts.push_back();
         if (attributes) {
             for (size_t i = 0; ATTS_NON_NULL(attributes, i); i += 2) {
@@ -501,7 +503,7 @@ static const TagHandler nameSetHandler = {
 
 static const TagHandler familyHandler = {
     /*start*/[](FamilyData* self, const char* tag, const char** attributes) {
-        self->fCurrentFamily.reset(new FontFamily(self->fBasePath, self->fIsFallback));
+        self->fCurrentFamily = std::make_unique<FontFamily>(self->fBasePath, self->fIsFallback);
         // 'order' (non-negative integer) [default -1]
         for (size_t i = 0; ATTS_NON_NULL(attributes, i); i += 2) {
             const char* value = attributes[i+1];
@@ -644,7 +646,7 @@ static int parse_config_file(const char* filename, SkTDArray<FontFamily*>& famil
         return -1;
     }
 
-    SkAutoTCallVProc<skstd::remove_pointer_t<XML_Parser>, XML_ParserFree> parser(
+    SkAutoTCallVProc<std::remove_pointer_t<XML_Parser>, XML_ParserFree> parser(
         XML_ParserCreate_MM(nullptr, &sk_XML_alloc, nullptr));
     if (!parser) {
         SkDebugf(SK_FONTMGR_ANDROID_PARSER_PREFIX "could not create XML parser\n");

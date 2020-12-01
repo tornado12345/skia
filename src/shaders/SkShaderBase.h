@@ -8,31 +8,51 @@
 #ifndef SkShaderBase_DEFINED
 #define SkShaderBase_DEFINED
 
-#include "SkFilterQuality.h"
-#include "SkMask.h"
-#include "SkMatrix.h"
-#include "SkNoncopyable.h"
-#include "SkShader.h"
-#include "SkTLazy.h"
+#include "include/core/SkFilterQuality.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkShader.h"
+#include "include/private/SkNoncopyable.h"
+#include "src/core/SkEffectPriv.h"
+#include "src/core/SkMask.h"
+#include "src/core/SkTLazy.h"
+#include "src/core/SkVM_fwd.h"
 
 #if SK_SUPPORT_GPU
-#include "GrFPArgs.h"
+#include "src/gpu/GrFPArgs.h"
 #endif
 
-class GrContext;
-class GrColorSpaceInfo;
 class GrFragmentProcessor;
 class SkArenaAlloc;
 class SkColorSpace;
-class SkColorSpaceXformer;
 class SkImage;
 struct SkImageInfo;
 class SkPaint;
 class SkRasterPipeline;
+class SkRuntimeEffect;
+
+/**
+ *  Shaders can optionally return a subclass of this when appending their stages.
+ *  Doing so tells the caller that the stages can be reused with different CTMs (but nothing
+ *  else can change), by calling the updater's udpate() method before each use.
+ *
+ *  This can be a perf-win bulk draws like drawAtlas and drawVertices, where most of the setup
+ *  (i.e. uniforms) are constant, and only something small is changing (i.e. matrices). This
+ *  reuse skips the cost of computing the stages (and/or avoids having to allocate a separate
+ *  shader for each small draw.
+ */
+class SkStageUpdater {
+public:
+    virtual ~SkStageUpdater() {}
+
+    virtual bool SK_WARN_UNUSED_RESULT update(const SkMatrix& ctm, const SkMatrix* localM) = 0;
+};
 
 class SkShaderBase : public SkShader {
 public:
     ~SkShaderBase() override;
+
+    sk_sp<SkShader> makeInvertAlpha() const;
+    sk_sp<SkShader> makeWithCTM(const SkMatrix&) const;  // owns its own ctm
 
     /**
      *  Returns true if the shader is guaranteed to produce only a single color.
@@ -114,7 +134,7 @@ public:
         SkMatrix    fTotalInverse;
         uint8_t     fPaintAlpha;
 
-        typedef SkNoncopyable INHERITED;
+        using INHERITED = SkNoncopyable;
     };
 
     /**
@@ -126,14 +146,14 @@ public:
 
 #if SK_SUPPORT_GPU
     /**
-     *  Returns a GrFragmentProcessor that implements the shader for the GPU backend. NULL is
+     *  Returns a GrFragmentProcessor that implements the shader for the GPU backend. nullptr is
      *  returned if there is no GPU implementation.
      *
      *  The GPU device does not call SkShader::createContext(), instead we pass the view matrix,
      *  local matrix, and filter quality directly.
      *
-     *  The GrContext may be used by the to create textures that are required by the returned
-     *  processor.
+     *  The GrRecordingContext may be used by the to create textures that are required by the
+     *  returned processor.
      *
      *  The returned GrFragmentProcessor should expect an unpremultiplied input color and
      *  produce a premultiplied output.
@@ -151,25 +171,9 @@ public:
      */
     bool asLuminanceColor(SkColor*) const;
 
-    /**
-     *  Returns a shader transformed into a new color space via the |xformer|.
-     */
-    sk_sp<SkShader> makeColorSpace(SkColorSpaceXformer* xformer) const {
-        return this->onMakeColorSpace(xformer);
-    }
-
-    struct StageRec {
-        SkRasterPipeline*   fPipeline;
-        SkArenaAlloc*       fAlloc;
-        SkColorType         fDstColorType;
-        SkColorSpace*       fDstCS;         // may be nullptr
-        const SkPaint&      fPaint;
-        const SkMatrix*     fLocalM;        // may be nullptr
-        SkMatrix            fCTM;
-    };
-
     // If this returns false, then we draw nothing (do not fall back to shader context)
-    bool appendStages(const StageRec&) const;
+    SK_WARN_UNUSED_RESULT
+    bool appendStages(const SkStageRec&) const;
 
     bool SK_WARN_UNUSED_RESULT computeTotalInverse(const SkMatrix& ctm,
                                                    const SkMatrix* outerLocalMatrix,
@@ -179,12 +183,13 @@ public:
     //
     //   M = postLocalMatrix x shaderLocalMatrix x preLocalMatrix
     //
-    SkTCopyOnFirstWrite<SkMatrix> totalLocalMatrix(const SkMatrix* preLocalMatrix,
-                                                   const SkMatrix* postLocalMatrix = nullptr) const;
+    SkTCopyOnFirstWrite<SkMatrix> totalLocalMatrix(const SkMatrix* preLocalMatrix) const;
 
-    virtual SkImage* onIsAImage(SkMatrix*, TileMode[2]) const {
+    virtual SkImage* onIsAImage(SkMatrix*, SkTileMode[2]) const {
         return nullptr;
     }
+
+    virtual SkRuntimeEffect* asRuntimeEffect() const { return nullptr; }
 
     static Type GetFlattenableType() { return kSkShaderBase_Type; }
     Type getFlattenableType() const override { return GetFlattenableType(); }
@@ -195,6 +200,22 @@ public:
                 SkFlattenable::Deserialize(GetFlattenableType(), data, size, procs).release()));
     }
     static void RegisterFlattenables();
+
+    /** DEPRECATED. skbug.com/8941
+     *  If this shader can be represented by another shader + a localMatrix, return that shader and
+     *  the localMatrix. If not, return nullptr and ignore the localMatrix parameter.
+     */
+    virtual sk_sp<SkShader> makeAsALocalMatrixShader(SkMatrix* localMatrix) const;
+
+    SkStageUpdater* appendUpdatableStages(const SkStageRec& rec) const {
+        return this->onAppendUpdatableStages(rec);
+    }
+
+    SK_WARN_UNUSED_RESULT
+    skvm::Color program(skvm::Builder*, skvm::Coord device, skvm::Coord local, skvm::Color paint,
+                        const SkMatrixProvider&, const SkMatrix* localM,
+                        SkFilterQuality quality, const SkColorInfo& dst,
+                        skvm::Uniforms* uniforms, SkArenaAlloc* alloc) const;
 
 protected:
     SkShaderBase(const SkMatrix* localMatrix = nullptr);
@@ -209,31 +230,31 @@ protected:
     virtual Context* onMakeContext(const ContextRec&, SkArenaAlloc*) const {
         return nullptr;
     }
-
-    /**
-     * Overriden by shaders which prefer burst mode.
-     */
-    virtual Context* onMakeBurstPipelineContext(const ContextRec&, SkArenaAlloc*) const {
-        return nullptr;
-    }
 #endif
 
     virtual bool onAsLuminanceColor(SkColor*) const {
         return false;
     }
 
-    virtual sk_sp<SkShader> onMakeColorSpace(SkColorSpaceXformer*) const {
-        return sk_ref_sp(const_cast<SkShaderBase*>(this));
-    }
-
     // Default impl creates shadercontext and calls that (not very efficient)
-    virtual bool onAppendStages(const StageRec&) const;
+    virtual bool onAppendStages(const SkStageRec&) const;
+
+    virtual SkStageUpdater* onAppendUpdatableStages(const SkStageRec&) const { return nullptr; }
+
+protected:
+    static skvm::Coord ApplyMatrix(skvm::Builder*, const SkMatrix&, skvm::Coord, skvm::Uniforms*);
 
 private:
     // This is essentially const, but not officially so it can be modified in constructors.
     SkMatrix fLocalMatrix;
 
-    typedef SkShader INHERITED;
+    virtual skvm::Color onProgram(skvm::Builder*,
+                                  skvm::Coord device, skvm::Coord local, skvm::Color paint,
+                                  const SkMatrixProvider&, const SkMatrix* localM,
+                                  SkFilterQuality quality, const SkColorInfo& dst,
+                                  skvm::Uniforms* uniforms, SkArenaAlloc* alloc) const;
+
+    using INHERITED = SkShader;
 };
 
 inline SkShaderBase* as_SB(SkShader* shader) {

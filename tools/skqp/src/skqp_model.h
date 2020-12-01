@@ -10,9 +10,9 @@
 #include <cstdint>
 #include <string>
 
-#include "SkBitmap.h"
+#include "include/core/SkBitmap.h"
 
-#include "skqp.h"
+#include "tools/skqp/src/skqp.h"
 
 class SkQPAssetManager;
 class SkStreamAsset;
@@ -54,5 +54,5 @@ SkQP::RenderOutcome Check(const SkPixmap& minImg,
 
 ModelResult CheckAgainstModel(const char* name, const SkPixmap& image,
                               SkQPAssetManager* assetManager);
-}
+}  // namespace skqp
 #endif  // skqp_model_DEFINED

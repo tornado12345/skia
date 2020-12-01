@@ -8,16 +8,19 @@
 #ifndef SkImageShader_DEFINED
 #define SkImageShader_DEFINED
 
-#include "SkBitmapProcShader.h"
-#include "SkColorSpaceXformer.h"
-#include "SkImage.h"
-#include "SkShaderBase.h"
+#include "include/core/SkImage.h"
+#include "src/shaders/SkBitmapProcShader.h"
+#include "src/shaders/SkShaderBase.h"
+
+// private subclass of SkStageUpdater
+class SkImageStageUpdater;
 
 class SkImageShader : public SkShaderBase {
 public:
     static sk_sp<SkShader> Make(sk_sp<SkImage>,
-                                SkShader::TileMode tx,
-                                SkShader::TileMode ty,
+                                SkTileMode tmx,
+                                SkTileMode tmy,
+                                const SkSamplingOptions*,   // null means inherit-from-paint-fq
                                 const SkMatrix* localMatrix,
                                 bool clampAsIfUnpremul = false);
 
@@ -27,35 +30,46 @@ public:
     std::unique_ptr<GrFragmentProcessor> asFragmentProcessor(const GrFPArgs&) const override;
 #endif
 
+    static SkM44 CubicResamplerMatrix(float B, float C);
+
 private:
     SK_FLATTENABLE_HOOKS(SkImageShader)
 
     SkImageShader(sk_sp<SkImage>,
-                  SkShader::TileMode tx,
-                  SkShader::TileMode ty,
+                  SkTileMode tmx,
+                  SkTileMode tmy,
+                  const SkSamplingOptions*,
                   const SkMatrix* localMatrix,
-                  bool clampAsIfUnpremul);
+                  bool clampAsIfUnpremul = false);
 
     void flatten(SkWriteBuffer&) const override;
 #ifdef SK_ENABLE_LEGACY_SHADERCONTEXT
     Context* onMakeContext(const ContextRec&, SkArenaAlloc* storage) const override;
 #endif
-    SkImage* onIsAImage(SkMatrix*, SkShader::TileMode*) const override;
+    SkImage* onIsAImage(SkMatrix*, SkTileMode*) const override;
 
-    bool onAppendStages(const StageRec&) const override;
+    bool onAppendStages(const SkStageRec&) const override;
+    SkStageUpdater* onAppendUpdatableStages(const SkStageRec&) const override;
 
-    sk_sp<SkShader> onMakeColorSpace(SkColorSpaceXformer* xformer) const override {
-        return xformer->apply(fImage.get())->makeShader(fTileModeX, fTileModeY,
-                                                        &this->getLocalMatrix());
-    }
+    skvm::Color onProgram(skvm::Builder*, skvm::Coord device, skvm::Coord local, skvm::Color paint,
+                          const SkMatrixProvider&, const SkMatrix* localM,
+                          SkFilterQuality quality, const SkColorInfo& dst,
+                          skvm::Uniforms* uniforms, SkArenaAlloc*) const override;
 
-    sk_sp<SkImage>           fImage;
-    const SkShader::TileMode fTileModeX;
-    const SkShader::TileMode fTileModeY;
-    const bool               fClampAsIfUnpremul;
+    bool doStages(const SkStageRec&, SkImageStageUpdater* = nullptr) const;
+
+    sk_sp<SkImage>          fImage;
+    const SkSamplingOptions fSampling;
+    const SkTileMode        fTileModeX;
+    const SkTileMode        fTileModeY;
+    const bool              fClampAsIfUnpremul;
+    const bool              fUseSamplingOptions;    // else inherit filterquality from paint
 
     friend class SkShaderBase;
-    typedef SkShaderBase INHERITED;
+    using INHERITED = SkShaderBase;
+
+    // for legacy unflattening
+    static sk_sp<SkFlattenable> PreSamplingCreate(SkReadBuffer&);
 };
 
 #endif

@@ -5,17 +5,17 @@
  * found in the LICENSE file.
  */
 
-#include "SkTypes.h"
+#include "include/core/SkTypes.h"
 
 #ifdef SK_XML
 
-#include "Sample.h"
-#include "SkCanvas.h"
-#include "SkDOM.h"
-#include "SkOSFile.h"
-#include "SkOSPath.h"
-#include "SkStream.h"
-#include "SkSVGDOM.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkStream.h"
+#include "modules/svg/include/SkSVGDOM.h"
+#include "samplecode/Sample.h"
+#include "src/core/SkOSFile.h"
+#include "src/utils/SkOSPath.h"
+#include "src/xml/SkDOM.h"
 
 namespace {
 
@@ -33,13 +33,7 @@ protected:
             return;
         }
 
-        SkDOM xmlDom;
-        if (!xmlDom.build(svgStream)) {
-            SkDebugf("XML parsing failed: \"path\"\n", fPath.c_str());
-            return;
-        }
-
-        fDom = SkSVGDOM::MakeFromDOM(xmlDom);
+        fDom = SkSVGDOM::MakeFromStream(svgStream);
         if (fDom) {
             fDom->setContainerSize(SkSize::Make(this->width(), this->height()));
         }
@@ -59,20 +53,14 @@ protected:
         this->INHERITED::onSizeChange();
     }
 
-    bool onQuery(Sample::Event* evt) override {
-        if (Sample::TitleQ(*evt)) {
-            Sample::TitleR(evt, fLabel.c_str());
-            return true;
-        }
+    SkString name() override { return fLabel; }
 
-        return this->INHERITED::onQuery(evt);
-    }
 private:
     sk_sp<SkSVGDOM> fDom;
     SkString        fPath;
     SkString        fLabel;
 
-    typedef Sample INHERITED;
+    using INHERITED = Sample;
 };
 
 } // anonymous namespace

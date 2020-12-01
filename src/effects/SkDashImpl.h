@@ -8,7 +8,7 @@
 #ifndef SkDashImpl_DEFINED
 #define SkDashImpl_DEFINED
 
-#include "SkPathEffect.h"
+#include "include/core/SkPathEffect.h"
 
 class SkDashImpl : public SkPathEffect {
 public:
@@ -36,7 +36,7 @@ private:
     int32_t     fInitialDashIndex;
     SkScalar    fIntervalLength;
 
-    typedef SkPathEffect INHERITED;
+    using INHERITED = SkPathEffect;
 };
 
 #endif

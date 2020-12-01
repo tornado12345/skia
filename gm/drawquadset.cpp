@@ -5,14 +5,32 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
+#include "gm/gm.h"
+#include "include/core/SkBlendMode.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkFont.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkPoint.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkShader.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/core/SkTileMode.h"
+#include "include/core/SkTypeface.h"
+#include "include/core/SkTypes.h"
+#include "include/effects/SkGradientShader.h"
+#include "include/gpu/GrRecordingContext.h"
+#include "include/private/GrTypesPriv.h"
+#include "src/core/SkMatrixProvider.h"
+#include "src/gpu/GrPaint.h"
+#include "src/gpu/GrRenderTargetContext.h"
+#include "src/gpu/SkGr.h"
+#include "tools/ToolUtils.h"
 
-#include "GrClip.h"
-#include "GrContext.h"
-#include "GrRenderTargetContext.h"
-#include "GrSurfaceContextPriv.h"
-#include "SkGr.h"
-#include "SkGradientShader.h"
+#include <utility>
 
 static constexpr SkScalar kTileWidth = 40;
 static constexpr SkScalar kTileHeight = 30;
@@ -21,7 +39,8 @@ static constexpr int kRowCount = 4;
 static constexpr int kColCount = 3;
 
 static void draw_text(SkCanvas* canvas, const char* text) {
-    canvas->drawString(text, 0, 0, SkFont(nullptr, 12), SkPaint());
+    SkFont font(ToolUtils::create_portable_typeface(), 12);
+    canvas->drawString(text, 0, 0, font, SkPaint());
 }
 
 static void draw_gradient_tiles(SkCanvas* canvas, bool alignGradients) {
@@ -31,9 +50,9 @@ static void draw_gradient_tiles(SkCanvas* canvas, bool alignGradients) {
 
     GrRenderTargetContext* rtc = canvas->internal_private_accessTopLayerRenderTargetContext();
 
-    GrContext* context = canvas->getGrContext();
+    auto context = canvas->recordingContext();
 
-    auto gradient = SkGradientShader::MakeLinear(pts, colors, nullptr, 2, SkShader::kMirror_TileMode);
+    auto gradient = SkGradientShader::MakeLinear(pts, colors, nullptr, 2, SkTileMode::kMirror);
     SkPaint paint;
     paint.setShader(gradient);
 
@@ -64,17 +83,19 @@ static void draw_gradient_tiles(SkCanvas* canvas, bool alignGradients) {
             if (rtc) {
                 // Use non-public API to leverage general GrPaint capabilities
                 SkMatrix view = canvas->getTotalMatrix();
+                SkSimpleMatrixProvider matrixProvider(view);
                 GrPaint grPaint;
-                SkPaintToGrPaint(context, rtc->colorSpaceInfo(), paint, view, &grPaint);
-                rtc->fillRectWithEdgeAA(GrNoClip(), std::move(grPaint), GrAA::kYes,
+                SkPaintToGrPaint(context, rtc->colorInfo(), paint, matrixProvider, &grPaint);
+                rtc->fillRectWithEdgeAA(nullptr, std::move(grPaint), GrAA::kYes,
                                         static_cast<GrQuadAAFlags>(aa), view, tile);
             } else {
                 // Fallback to solid color on raster backend since the public API only has color
                 SkColor color = alignGradients ? SK_ColorBLUE
                                                : (i * kColCount + j) % 2 == 0 ? SK_ColorBLUE
                                                                               : SK_ColorWHITE;
-                canvas->experimental_DrawEdgeAARectV1(
-                        tile, static_cast<SkCanvas::QuadAAFlags>(aa), color, SkBlendMode::kSrcOver);
+                canvas->experimental_DrawEdgeAAQuad(
+                        tile, nullptr, static_cast<SkCanvas::QuadAAFlags>(aa), color,
+                        SkBlendMode::kSrcOver);
             }
 
             if (!alignGradients) {
@@ -111,8 +132,8 @@ static void draw_color_tiles(SkCanvas* canvas, bool multicolor) {
                 aa |= SkCanvas::kRight_QuadAAFlag;
             }
 
-            canvas->experimental_DrawEdgeAARectV1(
-                    tile, static_cast<SkCanvas::QuadAAFlags>(aa), color.toSkColor(),
+            canvas->experimental_DrawEdgeAAQuad(
+                    tile, nullptr, static_cast<SkCanvas::QuadAAFlags>(aa), color.toSkColor(),
                     SkBlendMode::kSrcOver);
         }
     }
@@ -157,7 +178,7 @@ namespace skiagm {
 
 class DrawQuadSetGM : public GM {
 private:
-    SkString onShortName() final { return SkString("draw_quad_set"); }
+    SkString onShortName() override { return SkString("draw_quad_set"); }
     SkISize onISize() override { return SkISize::Make(800, 800); }
 
     void onDraw(SkCanvas* canvas) override {

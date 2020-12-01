@@ -8,7 +8,7 @@
 #ifndef SkDashPathPriv_DEFINED
 #define SkDashPathPriv_DEFINED
 
-#include "SkPathEffect.h"
+#include "include/core/SkPathEffect.h"
 
 namespace SkDashPath {
     /**
@@ -47,6 +47,6 @@ namespace SkDashPath {
                         StrokeRecApplication = StrokeRecApplication::kAllow);
 
     bool ValidDashPath(SkScalar phase, const SkScalar intervals[], int32_t count);
-}
+}  // namespace SkDashPath
 
 #endif

@@ -8,8 +8,8 @@
 #ifndef SkDiscretePathEffect_DEFINED
 #define SkDiscretePathEffect_DEFINED
 
-#include "SkFlattenable.h"
-#include "SkPathEffect.h"
+#include "include/core/SkFlattenable.h"
+#include "include/core/SkPathEffect.h"
 
 /** \class SkDiscretePathEffect
 
@@ -47,7 +47,7 @@ private:
     /* Caller-supplied 32 bit seed assist */
     uint32_t fSeedAssist;
 
-    typedef SkPathEffect INHERITED;
+    using INHERITED = SkPathEffect;
 };
 
 #endif

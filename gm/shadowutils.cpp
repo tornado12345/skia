@@ -5,11 +5,24 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
-#include "SkCanvas.h"
-#include "SkPath.h"
-#include "SkResourceCache.h"
-#include "SkShadowUtils.h"
+#include "gm/gm.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkPathBuilder.h"
+#include "include/core/SkPoint.h"
+#include "include/core/SkPoint3.h"
+#include "include/core/SkRRect.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkTypes.h"
+#include "include/private/SkShadowFlags.h"
+#include "include/private/SkTArray.h"
+#include "include/private/SkTDArray.h"
+#include "include/utils/SkShadowUtils.h"
+
+#include <initializer_list>
 
 void draw_shadow(SkCanvas* canvas, const SkPath& path, SkScalar height, SkColor color,
                  SkPoint3 lightPos, SkScalar lightR, bool isAmbient, uint32_t flags) {
@@ -34,14 +47,14 @@ enum ShadowMode {
 
 void draw_paths(SkCanvas* canvas, ShadowMode mode) {
     SkTArray<SkPath> paths;
-    paths.push_back().addRoundRect(SkRect::MakeWH(50, 50), 10, 10);
+    paths.push_back(SkPath::RRect(SkRect::MakeWH(50, 50), 10, 10));
     SkRRect oddRRect;
     oddRRect.setNinePatch(SkRect::MakeWH(50, 50), 9, 13, 6, 16);
-    paths.push_back().addRRect(oddRRect);
-    paths.push_back().addRect(SkRect::MakeWH(50, 50));
-    paths.push_back().addCircle(25, 25, 25);
-    paths.push_back().cubicTo(100, 50, 20, 100, 0, 0);
-    paths.push_back().addOval(SkRect::MakeWH(20, 60));
+    paths.push_back(SkPath::RRect(oddRRect));
+    paths.push_back(SkPath::Rect(SkRect::MakeWH(50, 50)));
+    paths.push_back(SkPath::Circle(25, 25, 25));
+    paths.push_back(SkPathBuilder().cubicTo(100, 50, 20, 100, 0, 0).detach());
+    paths.push_back(SkPath::Oval(SkRect::MakeWH(20, 60)));
 
     // star
     SkTArray<SkPath> concavePaths;
@@ -83,6 +96,7 @@ void draw_paths(SkCanvas* canvas, ShadowMode mode) {
     m->postScale(1.2f, 0.8f, 25.f, 25.f);
     for (auto& m : matrices) {
         for (int flags : { kNone_ShadowFlag, kTransparentOccluder_ShadowFlag }) {
+            int pathCounter = 0;
             for (const auto& path : paths) {
                 SkRect postMBounds = path.getBounds();
                 m.mapRect(&postMBounds);
@@ -99,6 +113,11 @@ void draw_paths(SkCanvas* canvas, ShadowMode mode) {
                 canvas->save();
                 canvas->concat(m);
 
+                // flip a couple of paths to test 180° rotation
+                if (kTransparentOccluder_ShadowFlag == flags && 0 == pathCounter % 3) {
+                    canvas->save();
+                    canvas->rotate(180, 25, 25);
+                }
                 if (kDebugColorNoOccluders == mode || kDebugColorOccluders == mode) {
                     draw_shadow(canvas, path, kHeight, SK_ColorRED, lightPos, kLightR,
                                 true, flags);
@@ -130,11 +149,15 @@ void draw_paths(SkCanvas* canvas, ShadowMode mode) {
                     paint.setStyle(SkPaint::kFill_Style);
                 }
                 canvas->drawPath(path, paint);
+                if (kTransparentOccluder_ShadowFlag == flags && 0 == pathCounter % 3) {
+                    canvas->restore();
+                }
                 canvas->restore();
 
                 canvas->translate(dx, 0);
                 x += dx;
-                dy = SkTMax(dy, postMBounds.height() + kPad + kHeight);
+                dy = std::max(dy, postMBounds.height() + kPad + kHeight);
+                ++pathCounter;
             }
         }
     }
@@ -184,7 +207,7 @@ void draw_paths(SkCanvas* canvas, ShadowMode mode) {
 
             canvas->translate(dx, 0);
             x += dx;
-            dy = SkTMax(dy, postMBounds.height() + kPad + kHeight);
+            dy = std::max(dy, postMBounds.height() + kPad + kHeight);
         }
     }
 
@@ -211,4 +234,29 @@ DEF_SIMPLE_GM(shadow_utils_occl, canvas, kW, kH) {
 
 DEF_SIMPLE_GM(shadow_utils_gray, canvas, kW, kH) {
     draw_paths(canvas, kGrayscale);
+}
+
+#include "include/effects/SkGradientShader.h"
+#include "src/core/SkColorFilterPriv.h"
+
+DEF_SIMPLE_GM(shadow_utils_gaussian_colorfilter, canvas, 512, 256) {
+    const SkRect r = SkRect::MakeWH(256, 256);
+
+    const SkColor colors[] = { 0, 0xFF000000 };
+    auto sh = SkGradientShader::MakeRadial({r.centerX(), r.centerY()}, r.width(),
+                                           colors, nullptr, SK_ARRAY_COUNT(colors),
+                                           SkTileMode::kClamp);
+
+    SkPaint redPaint;
+    redPaint.setColor(SK_ColorRED);
+
+    SkPaint paint;
+    paint.setShader(sh);
+    canvas->drawRect(r, redPaint);
+    canvas->drawRect(r, paint);
+
+    canvas->translate(256, 0);
+    paint.setColorFilter(SkColorFilterPriv::MakeGaussian());
+    canvas->drawRect(r, redPaint);
+    canvas->drawRect(r, paint);
 }

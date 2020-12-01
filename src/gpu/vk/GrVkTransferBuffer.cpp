@@ -5,9 +5,9 @@
 * found in the LICENSE file.
 */
 
-#include "GrVkTransferBuffer.h"
-#include "GrVkGpu.h"
-#include "SkTraceMemoryDump.h"
+#include "include/core/SkTraceMemoryDump.h"
+#include "src/gpu/vk/GrVkGpu.h"
+#include "src/gpu/vk/GrVkTransferBuffer.h"
 
 sk_sp<GrVkTransferBuffer> GrVkTransferBuffer::Make(GrVkGpu* gpu, size_t size,
                                                    GrVkBuffer::Type type) {
@@ -24,7 +24,7 @@ sk_sp<GrVkTransferBuffer> GrVkTransferBuffer::Make(GrVkGpu* gpu, size_t size,
 
     GrVkTransferBuffer* buffer = new GrVkTransferBuffer(gpu, desc, bufferResource);
     if (!buffer) {
-        bufferResource->unref(gpu);
+        bufferResource->unref();
     }
     return sk_sp<GrVkTransferBuffer>(buffer);
 }
@@ -43,12 +43,13 @@ void GrVkTransferBuffer::onRelease() {
     if (!this->wasDestroyed()) {
         this->vkRelease(this->getVkGpu());
     }
-
     INHERITED::onRelease();
 }
 
 void GrVkTransferBuffer::onAbandon() {
-    this->vkAbandon();
+    if (!this->wasDestroyed()) {
+        this->vkRelease(this->getVkGpu());
+    }
     INHERITED::onAbandon();
 }
 

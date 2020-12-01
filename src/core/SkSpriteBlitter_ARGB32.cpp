@@ -5,15 +5,14 @@
  * found in the LICENSE file.
  */
 
-#include "SkSpriteBlitter.h"
-#include "SkArenaAlloc.h"
-#include "SkBlitRow.h"
-#include "SkColorFilter.h"
-#include "SkColorData.h"
-#include "SkPaint.h"
-#include "SkTemplates.h"
-#include "SkUTF.h"
-#include "SkXfermodePriv.h"
+#include "include/core/SkColorFilter.h"
+#include "include/core/SkPaint.h"
+#include "include/private/SkColorData.h"
+#include "include/private/SkTemplates.h"
+#include "src/core/SkArenaAlloc.h"
+#include "src/core/SkBlitRow.h"
+#include "src/core/SkSpriteBlitter.h"
+#include "src/core/SkXfermodePriv.h"
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -54,7 +53,7 @@ private:
     SkBlitRow::Proc32   fProc32;
     U8CPU               fAlpha;
 
-    typedef SkSpriteBlitter INHERITED;
+    using INHERITED = SkSpriteBlitter;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -86,7 +85,7 @@ protected:
     SkXfermode* fXfermode;
 
 private:
-    typedef SkSpriteBlitter INHERITED;
+    using INHERITED = SkSpriteBlitter;
 };
 
 ///////////////////////////////////////////////////////////////////////////////

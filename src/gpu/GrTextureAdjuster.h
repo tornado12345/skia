@@ -8,54 +8,43 @@
 #ifndef GrTextureAdjuster_DEFINED
 #define GrTextureAdjuster_DEFINED
 
-#include "GrTextureProducer.h"
-#include "GrTextureProxy.h"
-#include "SkTLazy.h"
+#include "src/core/SkTLazy.h"
+#include "src/gpu/GrTextureProducer.h"
+#include "src/gpu/GrTextureProxy.h"
 
 class GrRecordingContext;
 
 /**
- * Base class for sources that start out as textures. Optionally allows for a content area subrect.
- * The intent is not to use content area for subrect rendering. Rather, the pixels outside the
- * content area have undefined values and shouldn't be read *regardless* of filtering mode or
- * the SkCanvas::SrcRectConstraint used for subrect draws.
+ * GrTextureProducer subclass that can be used when the user already has a texture that represents
+ * image contents.
  */
-class GrTextureAdjuster : public GrTextureProducer {
+class GrTextureAdjuster final : public GrTextureProducer {
 public:
-    std::unique_ptr<GrFragmentProcessor> createFragmentProcessor(
+    GrTextureAdjuster(GrRecordingContext*, GrSurfaceProxyView, const GrColorInfo&,
+                      uint32_t uniqueID);
+
+    std::unique_ptr<GrFragmentProcessor> createFragmentProcessor(const SkMatrix& textureMatrix,
+                                                                 const SkRect* subset,
+                                                                 const SkRect* domain,
+                                                                 GrSamplerState) override;
+
+    std::unique_ptr<GrFragmentProcessor> createBicubicFragmentProcessor(
             const SkMatrix& textureMatrix,
-            const SkRect& constraintRect,
-            FilterConstraint,
-            bool coordsLimitedToConstraintRect,
-            const GrSamplerState::Filter* filterOrNullForBicubic) override;
-
-    // We do not ref the texture nor the colorspace, so the caller must keep them in scope while
-    // this Adjuster is alive.
-    GrTextureAdjuster(GrRecordingContext*, sk_sp<GrTextureProxy>, SkAlphaType,
-                      uint32_t uniqueID, SkColorSpace*, bool useDecal = false);
-
-protected:
-    SkAlphaType alphaType() const override { return fAlphaType; }
-    SkColorSpace* colorSpace() const override { return fColorSpace; }
-    void makeCopyKey(const CopyParams& params, GrUniqueKey* copyKey) override;
-    void didCacheCopy(const GrUniqueKey& copyKey, uint32_t contextUniqueID) override;
-
-    GrTextureProxy* originalProxy() const { return fOriginal.get(); }
-    sk_sp<GrTextureProxy> originalProxyRef() const { return fOriginal; }
+            const SkRect* subset,
+            const SkRect* domain,
+            GrSamplerState::WrapMode wrapX,
+            GrSamplerState::WrapMode wrapY,
+            SkImage::CubicResampler) override;
 
 private:
-    sk_sp<GrTextureProxy> onRefTextureProxyForParams(const GrSamplerState&,
-                                                     bool willBeMipped,
-                                                     SkScalar scaleAdjust[2]) override;
+    GrSurfaceProxyView onView(GrMipmapped) override;
 
-    sk_sp<GrTextureProxy> refTextureProxyCopy(const CopyParams& copyParams, bool willBeMipped);
+    GrSurfaceProxyView makeMippedCopy();
 
-    sk_sp<GrTextureProxy> fOriginal;
-    SkAlphaType           fAlphaType;
-    SkColorSpace*         fColorSpace;
-    uint32_t              fUniqueID;
+    GrSurfaceProxyView fOriginal;
+    uint32_t fUniqueID;
 
-    typedef GrTextureProducer INHERITED;
+    using INHERITED = GrTextureProducer;
 };
 
 #endif

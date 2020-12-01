@@ -11,38 +11,39 @@
 #include <stack>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 
-#include "SkSLCodeGenerator.h"
-#include "SkSLMemoryLayout.h"
-#include "SkSLStringStream.h"
-#include "ir/SkSLBinaryExpression.h"
-#include "ir/SkSLBoolLiteral.h"
-#include "ir/SkSLConstructor.h"
-#include "ir/SkSLDoStatement.h"
-#include "ir/SkSLExtension.h"
-#include "ir/SkSLFloatLiteral.h"
-#include "ir/SkSLIfStatement.h"
-#include "ir/SkSLIndexExpression.h"
-#include "ir/SkSLInterfaceBlock.h"
-#include "ir/SkSLIntLiteral.h"
-#include "ir/SkSLFieldAccess.h"
-#include "ir/SkSLForStatement.h"
-#include "ir/SkSLFunctionCall.h"
-#include "ir/SkSLFunctionDeclaration.h"
-#include "ir/SkSLFunctionDefinition.h"
-#include "ir/SkSLPrefixExpression.h"
-#include "ir/SkSLPostfixExpression.h"
-#include "ir/SkSLProgramElement.h"
-#include "ir/SkSLReturnStatement.h"
-#include "ir/SkSLSetting.h"
-#include "ir/SkSLStatement.h"
-#include "ir/SkSLSwitchStatement.h"
-#include "ir/SkSLSwizzle.h"
-#include "ir/SkSLTernaryExpression.h"
-#include "ir/SkSLVarDeclarations.h"
-#include "ir/SkSLVarDeclarationsStatement.h"
-#include "ir/SkSLVariableReference.h"
-#include "ir/SkSLWhileStatement.h"
+#include "src/sksl/SkSLCodeGenerator.h"
+#include "src/sksl/SkSLStringStream.h"
+#include "src/sksl/ir/SkSLBinaryExpression.h"
+#include "src/sksl/ir/SkSLBoolLiteral.h"
+#include "src/sksl/ir/SkSLConstructor.h"
+#include "src/sksl/ir/SkSLDoStatement.h"
+#include "src/sksl/ir/SkSLExtension.h"
+#include "src/sksl/ir/SkSLFieldAccess.h"
+#include "src/sksl/ir/SkSLFloatLiteral.h"
+#include "src/sksl/ir/SkSLForStatement.h"
+#include "src/sksl/ir/SkSLFunctionCall.h"
+#include "src/sksl/ir/SkSLFunctionDeclaration.h"
+#include "src/sksl/ir/SkSLFunctionDefinition.h"
+#include "src/sksl/ir/SkSLFunctionPrototype.h"
+#include "src/sksl/ir/SkSLIfStatement.h"
+#include "src/sksl/ir/SkSLIndexExpression.h"
+#include "src/sksl/ir/SkSLInlineMarker.h"
+#include "src/sksl/ir/SkSLIntLiteral.h"
+#include "src/sksl/ir/SkSLInterfaceBlock.h"
+#include "src/sksl/ir/SkSLPostfixExpression.h"
+#include "src/sksl/ir/SkSLPrefixExpression.h"
+#include "src/sksl/ir/SkSLProgramElement.h"
+#include "src/sksl/ir/SkSLReturnStatement.h"
+#include "src/sksl/ir/SkSLSetting.h"
+#include "src/sksl/ir/SkSLStatement.h"
+#include "src/sksl/ir/SkSLSwitchStatement.h"
+#include "src/sksl/ir/SkSLSwizzle.h"
+#include "src/sksl/ir/SkSLTernaryExpression.h"
+#include "src/sksl/ir/SkSLVarDeclarations.h"
+#include "src/sksl/ir/SkSLVariableReference.h"
+#include "src/sksl/ir/SkSLWhileStatement.h"
 
 namespace SkSL {
 
@@ -90,11 +91,12 @@ public:
 
 protected:
     typedef int Requirements;
-    static constexpr Requirements kNo_Requirements      = 0;
-    static constexpr Requirements kInputs_Requirement   = 1 << 0;
-    static constexpr Requirements kOutputs_Requirement  = 1 << 1;
-    static constexpr Requirements kUniforms_Requirement = 1 << 2;
-    static constexpr Requirements kGlobals_Requirement  = 1 << 3;
+    static constexpr Requirements kNo_Requirements       = 0;
+    static constexpr Requirements kInputs_Requirement    = 1 << 0;
+    static constexpr Requirements kOutputs_Requirement   = 1 << 1;
+    static constexpr Requirements kUniforms_Requirement  = 1 << 2;
+    static constexpr Requirements kGlobals_Requirement   = 1 << 3;
+    static constexpr Requirements kFragCoord_Requirement = 1 << 4;
 
     enum IntrinsicKind {
         kSpecial_IntrinsicKind,
@@ -102,8 +104,12 @@ protected:
     };
 
     enum SpecialIntrinsic {
-        kTexture_SpecialIntrinsic,
+        kDistance_SpecialIntrinsic,
+        kDot_SpecialIntrinsic,
+        kLength_SpecialIntrinsic,
         kMod_SpecialIntrinsic,
+        kNormalize_SpecialIntrinsic,
+        kTexture_SpecialIntrinsic,
     };
 
     enum MetalIntrinsic {
@@ -114,6 +120,11 @@ protected:
         kGreaterThan_MetalIntrinsic,
         kGreaterThanEqual_MetalIntrinsic,
     };
+
+    static const char* OperatorName(Token::Kind op);
+
+    class GlobalStructVisitor;
+    void visitGlobalStruct(GlobalStructVisitor* visitor);
 
     void setupIntrinsics();
 
@@ -137,6 +148,8 @@ protected:
 
     void writeInterfaceBlocks();
 
+    void writeStructDefinitions();
+
     void writeFields(const std::vector<Type::Field>& fields, int parentOffset,
                      const InterfaceBlock* parentIntf = nullptr);
 
@@ -145,8 +158,13 @@ protected:
     int alignment(const Type* type, bool isPacked) const;
 
     void writeGlobalStruct();
+    void writeGlobalInit();
 
     void writePrecisionModifier();
+
+    String typeName(const Type& type);
+
+    bool writeStructDefinition(const Type& type);
 
     void writeType(const Type& type);
 
@@ -156,21 +174,21 @@ protected:
 
     void writeFunctionStart(const FunctionDeclaration& f);
 
-    void writeFunctionDeclaration(const FunctionDeclaration& f);
+    bool writeFunctionDeclaration(const FunctionDeclaration& f);
 
     void writeFunction(const FunctionDefinition& f);
+
+    void writeFunctionPrototype(const FunctionPrototype& f);
 
     void writeLayout(const Layout& layout);
 
     void writeModifiers(const Modifiers& modifiers, bool globalContext);
 
-    void writeGlobalVars(const VarDeclaration& vs);
-
     void writeVarInitializer(const Variable& var, const Expression& value);
 
     void writeName(const String& name);
 
-    void writeVarDeclarations(const VarDeclarations& decl, bool global);
+    void writeVarDeclaration(const VarDeclaration& decl, bool global);
 
     void writeFragCoord();
 
@@ -186,7 +204,10 @@ protected:
 
     void writeInverseHack(const Expression& mat);
 
-    String getMatrixConstructHelper(const Type& matrix, const Type& arg);
+    bool matrixConstructHelperIsNeeded(const Constructor& c);
+    String getMatrixConstructHelper(const Constructor& c);
+    void assembleMatrixFromMatrix(const Type& sourceMatrix, int rows, int columns);
+    void assembleMatrixFromExpressions(const ExpressionArray& args, int rows, int columns);
 
     void writeMatrixTimesEqualHelper(const Type& left, const Type& right, const Type& result);
 
@@ -222,7 +243,7 @@ protected:
 
     void writeStatement(const Statement& s);
 
-    void writeStatements(const std::vector<std::unique_ptr<Statement>>& statements);
+    void writeStatements(const StatementArray& statements);
 
     void writeBlock(const Block& b);
 
@@ -242,20 +263,17 @@ protected:
 
     Requirements requirements(const FunctionDeclaration& f);
 
-    Requirements requirements(const Expression& e);
+    Requirements requirements(const Expression* e);
 
-    Requirements requirements(const Statement& e);
+    Requirements requirements(const Statement* s);
 
     typedef std::pair<IntrinsicKind, int32_t> Intrinsic;
     std::unordered_map<String, Intrinsic> fIntrinsicMap;
     std::unordered_set<String> fReservedWords;
-    std::vector<const VarDeclaration*> fInitNonConstGlobalVars;
-    std::vector<const Variable*> fTextures;
     std::unordered_map<const Type::Field*, const InterfaceBlock*> fInterfaceBlockMap;
     std::unordered_map<const InterfaceBlock*, String> fInterfaceBlockNameMap;
     int fAnonInterfaceCount = 0;
     int fPaddingCount = 0;
-    bool fNeedsGlobalStructInit = false;
     const char* fLineEnding;
     const Context& fContext;
     StringStream fHeader;
@@ -272,16 +290,16 @@ protected:
     std::set<String> fWrittenIntrinsics;
     // true if we have run into usages of dFdx / dFdy
     bool fFoundDerivatives = false;
-    bool fFoundImageDecl = false;
     std::unordered_map<const FunctionDeclaration*, Requirements> fRequirements;
     bool fSetupFragPositionGlobal = false;
     bool fSetupFragPositionLocal = false;
-    std::unordered_map<String, String> fHelpers;
+    std::unordered_set<String> fHelpers;
     int fUniformBuffer = -1;
+    String fRTHeightName;
 
-    typedef CodeGenerator INHERITED;
+    using INHERITED = CodeGenerator;
 };
 
-}
+}  // namespace SkSL
 
 #endif

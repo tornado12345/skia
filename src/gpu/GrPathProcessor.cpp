@@ -5,16 +5,19 @@
 * found in the LICENSE file.
 */
 
-#include "GrPathProcessor.h"
+#include "src/gpu/GrPathProcessor.h"
 
-#include "GrShaderCaps.h"
-#include "SkTo.h"
-#include "gl/GrGLGpu.h"
-#include "gl/GrGLVaryingHandler.h"
-#include "glsl/GrGLSLFragmentShaderBuilder.h"
-#include "glsl/GrGLSLPrimitiveProcessor.h"
-#include "glsl/GrGLSLUniformHandler.h"
-#include "glsl/GrGLSLVarying.h"
+#include "include/private/SkTo.h"
+#include "src/core/SkMatrixPriv.h"
+#include "src/gpu/GrShaderCaps.h"
+#include "src/gpu/gl/GrGLGpu.h"
+#ifdef SK_GL
+#include "src/gpu/gl/GrGLVaryingHandler.h"
+#endif
+#include "src/gpu/glsl/GrGLSLFragmentShaderBuilder.h"
+#include "src/gpu/glsl/GrGLSLPrimitiveProcessor.h"
+#include "src/gpu/glsl/GrGLSLUniformHandler.h"
+#include "src/gpu/glsl/GrGLSLVarying.h"
 
 class GrGLPathProcessor : public GrGLSLPrimitiveProcessor {
 public:
@@ -35,11 +38,13 @@ public:
         }
 
         // emit transforms
-        this->emitTransforms(args.fVaryingHandler, args.fFPCoordTransformHandler);
+        this->emitTransforms(args.fVaryingHandler, args.fUniformHandler,
+                             args.fFPCoordTransformHandler);
 
         // Setup uniform color
         const char* stagedLocalVarName;
-        fColorUniform = args.fUniformHandler->addUniform(kFragment_GrShaderFlag,
+        fColorUniform = args.fUniformHandler->addUniform(nullptr,
+                                                         kFragment_GrShaderFlag,
                                                          kHalf4_GrSLType,
                                                          "Color",
                                                          &stagedLocalVarName);
@@ -50,67 +55,59 @@ public:
     }
 
     void emitTransforms(GrGLSLVaryingHandler* varyingHandler,
+                        GrGLSLUniformHandler* uniformHandler,
                         FPCoordTransformHandler* transformHandler) {
-        int i = 0;
-        while (const GrCoordTransform* coordTransform = transformHandler->nextCoordTransform()) {
-            GrSLType varyingType =
-                    coordTransform->getMatrix().hasPerspective() ? kHalf3_GrSLType
-                                                                 : kHalf2_GrSLType;
-
+        for (int i = 0; *transformHandler; ++*transformHandler, ++i) {
             SkString strVaryingName;
             strVaryingName.printf("TransformedCoord_%d", i);
-            GrGLSLVarying v(varyingType);
-            GrGLVaryingHandler* glVaryingHandler = (GrGLVaryingHandler*) varyingHandler;
-            fInstalledTransforms.push_back().fHandle =
-                    glVaryingHandler->addPathProcessingVarying(strVaryingName.c_str(),
-                                                               &v).toIndex();
-            fInstalledTransforms.back().fType = varyingType;
-
-            transformHandler->specifyCoordsForCurrCoordTransform(SkString(v.fsIn()), varyingType);
-            ++i;
+            GrGLSLVarying v(kFloat2_GrSLType);
+#ifdef SK_GL
+            GrGLVaryingHandler* glVaryingHandler = (GrGLVaryingHandler*)varyingHandler;
+            fVaryingTransform.push_back().fHandle =
+                    glVaryingHandler->addPathProcessingVarying(strVaryingName.c_str(), &v)
+                            .toIndex();
+#endif
+            GrShaderVar fragmentVar = {SkString(v.fsIn()), kFloat2_GrSLType};
+            transformHandler->specifyCoordsForCurrCoordTransform(fragmentVar);
         }
     }
 
     void setData(const GrGLSLProgramDataManager& pd,
-                 const GrPrimitiveProcessor& primProc,
-                 FPCoordTransformIter&& transformIter) override {
+                 const GrPrimitiveProcessor& primProc) override {
         const GrPathProcessor& pathProc = primProc.cast<GrPathProcessor>();
         if (pathProc.color() != fColor) {
             pd.set4fv(fColorUniform, 1, pathProc.color().vec());
             fColor = pathProc.color();
         }
 
-        int t = 0;
-        while (const GrCoordTransform* coordTransform = transformIter.next()) {
-            SkASSERT(fInstalledTransforms[t].fHandle.isValid());
-            const SkMatrix& m = GetTransformMatrix(pathProc.localMatrix(), *coordTransform);
-            if (fInstalledTransforms[t].fCurrentValue.cheapEqualTo(m)) {
-                continue;
+        for (int v = 0; v < fVaryingTransform.count(); ++v) {
+            if (fVaryingTransform[v].fHandle.isValid()) {
+                SkMatrix m = pathProc.localMatrix();
+                if (!SkMatrixPriv::CheapEqual(fVaryingTransform[v].fCurrentValue, m)) {
+                    fVaryingTransform[v].fCurrentValue = m;
+                    pd.setPathFragmentInputTransform(fVaryingTransform[v].fHandle, 2, m);
+                }
             }
-            fInstalledTransforms[t].fCurrentValue = m;
-
-            SkASSERT(fInstalledTransforms[t].fType == kHalf2_GrSLType ||
-                     fInstalledTransforms[t].fType == kHalf3_GrSLType);
-            unsigned components = fInstalledTransforms[t].fType == kHalf2_GrSLType ? 2 : 3;
-            pd.setPathFragmentInputTransform(fInstalledTransforms[t].fHandle, components, m);
-            ++t;
         }
     }
 
 private:
-    typedef GrGLSLProgramDataManager::VaryingHandle VaryingHandle;
+    using VaryingHandle = GrGLSLProgramDataManager::VaryingHandle;
+
+    // Varying transforms are used for non-explicitly sampled FPs. We provide a matrix
+    // to GL as fixed function state and it uses it to compute a varying that we pick up
+    // in the FS as the transformed local coords.
     struct TransformVarying {
-        VaryingHandle  fHandle;
-        SkMatrix       fCurrentValue = SkMatrix::InvalidMatrix();
-        GrSLType       fType = kVoid_GrSLType;
+        VaryingHandle fHandle;
+        SkMatrix      fCurrentValue = SkMatrix::InvalidMatrix();
     };
 
-    SkTArray<TransformVarying, true> fInstalledTransforms;
+    SkTArray<TransformVarying, true> fVaryingTransform;
 
     UniformHandle fColorUniform;
     SkPMColor4f fColor;
 
-    typedef GrGLSLPrimitiveProcessor INHERITED;
+    using INHERITED = GrGLSLPrimitiveProcessor;
 };
 
 GrPathProcessor::GrPathProcessor(const SkPMColor4f& color,

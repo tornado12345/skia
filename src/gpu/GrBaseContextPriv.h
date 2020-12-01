@@ -8,7 +8,7 @@
 #ifndef GrBaseContextPriv_DEFINED
 #define GrBaseContextPriv_DEFINED
 
-#include "GrContext_Base.h"
+#include "include/private/GrContext_Base.h"
 
 /** Class that exposes methods on GrContext_Base that are only intended for use internal to Skia.
     This class is purely a privileged window into GrContext_Base. It should never have
@@ -22,23 +22,19 @@ public:
 
     const GrContextOptions& options() const { return fContext->options(); }
 
-    bool explicitlyAllocateGPUResources() const {
-        return fContext->explicitlyAllocateGPUResources();
-    }
-
     const GrCaps* caps() const { return fContext->caps(); }
     sk_sp<const GrCaps> refCaps() const;
 
-    sk_sp<GrSkSLFPFactoryCache> fpFactoryCache();
-
     GrImageContext* asImageContext() { return fContext->asImageContext(); }
     GrRecordingContext* asRecordingContext() { return fContext->asRecordingContext(); }
-    GrContext* asDirectContext() { return fContext->asDirectContext(); }
+    GrDirectContext* asDirectContext() { return fContext->asDirectContext(); }
+
+    GrContextOptions::ShaderErrorHandler* getShaderErrorHandler() const;
 
 private:
     explicit GrBaseContextPriv(GrContext_Base* context) : fContext(context) {}
-    GrBaseContextPriv(const GrBaseContextPriv&); // unimpl
-    GrBaseContextPriv& operator=(const GrBaseContextPriv&); // unimpl
+    GrBaseContextPriv(const GrBaseContextPriv&) = delete;
+    GrBaseContextPriv& operator=(const GrBaseContextPriv&) = delete;
 
     // No taking addresses of this type.
     const GrBaseContextPriv* operator&() const;
@@ -51,7 +47,7 @@ private:
 
 inline GrBaseContextPriv GrContext_Base::priv() { return GrBaseContextPriv(this); }
 
-inline const GrBaseContextPriv GrContext_Base::priv () const {
+inline const GrBaseContextPriv GrContext_Base::priv () const {  // NOLINT(readability-const-return-type)
     return GrBaseContextPriv(const_cast<GrContext_Base*>(this));
 }
 

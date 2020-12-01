@@ -5,14 +5,13 @@
  * found in the LICENSE file.
  */
 
-#include "SkAndroidCodec.h"
-#include "SkAndroidCodecAdapter.h"
-#include "SkCodec.h"
-#include "SkCodecPriv.h"
-#include "SkMakeUnique.h"
-#include "SkPixmap.h"
-#include "SkPixmapPriv.h"
-#include "SkSampledCodec.h"
+#include "include/codec/SkAndroidCodec.h"
+#include "include/codec/SkCodec.h"
+#include "include/core/SkPixmap.h"
+#include "src/codec/SkAndroidCodecAdapter.h"
+#include "src/codec/SkCodecPriv.h"
+#include "src/codec/SkSampledCodec.h"
+#include "src/core/SkPixmapPriv.h"
 
 static bool is_valid_sample_size(int sampleSize) {
     // FIXME: As Leon has mentioned elsewhere, surely there is also a maximum sampleSize?
@@ -91,20 +90,25 @@ std::unique_ptr<SkAndroidCodec> SkAndroidCodec::MakeFromCodec(std::unique_ptr<Sk
         case SkEncodedImageFormat::kPNG:
         case SkEncodedImageFormat::kICO:
         case SkEncodedImageFormat::kJPEG:
+#ifndef SK_HAS_WUFFS_LIBRARY
         case SkEncodedImageFormat::kGIF:
+#endif
         case SkEncodedImageFormat::kBMP:
         case SkEncodedImageFormat::kWBMP:
         case SkEncodedImageFormat::kHEIF:
-            return skstd::make_unique<SkSampledCodec>(codec.release(), orientationBehavior);
-
-#ifdef SK_HAS_WEBP_LIBRARY
+        case SkEncodedImageFormat::kAVIF:
+            return std::make_unique<SkSampledCodec>(codec.release(), orientationBehavior);
+#ifdef SK_HAS_WUFFS_LIBRARY
+        case SkEncodedImageFormat::kGIF:
+#endif
+#ifdef SK_CODEC_DECODES_WEBP
         case SkEncodedImageFormat::kWEBP:
 #endif
 #ifdef SK_CODEC_DECODES_RAW
         case SkEncodedImageFormat::kDNG:
 #endif
-#if defined(SK_HAS_WEBP_LIBRARY) || defined(SK_CODEC_DECODES_RAW)
-            return skstd::make_unique<SkAndroidCodecAdapter>(codec.release(), orientationBehavior);
+#if defined(SK_CODEC_DECODES_WEBP) || defined(SK_CODEC_DECODES_RAW) || defined(SK_HAS_WUFFS_LIBRARY)
+            return std::make_unique<SkAndroidCodecAdapter>(codec.release(), orientationBehavior);
 #endif
 
         default:
@@ -180,7 +184,7 @@ sk_sp<SkColorSpace> SkAndroidCodec::computeOutputColorSpace(SkColorType outputCo
                 }
 
                 if (is_wide_gamut(*encodedProfile)) {
-                    return SkColorSpace::MakeRGB(SkNamedTransferFn::kSRGB, SkNamedGamut::kDCIP3);
+                    return SkColorSpace::MakeRGB(SkNamedTransferFn::kSRGB, SkNamedGamut::kDisplayP3);
                 }
             }
 
@@ -368,19 +372,33 @@ SkCodec::Result SkAndroidCodec::getAndroidPixels(const SkImageInfo& requestInfo,
     AndroidOptions defaultOptions;
     if (!options) {
         options = &defaultOptions;
-    } else if (options->fSubset) {
-        if (!is_valid_subset(*options->fSubset, adjustedInfo.dimensions())) {
-            return SkCodec::kInvalidParameters;
+    } else {
+        if (options->fSubset) {
+            if (!is_valid_subset(*options->fSubset, adjustedInfo.dimensions())) {
+                return SkCodec::kInvalidParameters;
+            }
+
+            if (SkIRect::MakeSize(adjustedInfo.dimensions()) == *options->fSubset) {
+                // The caller wants the whole thing, rather than a subset. Modify
+                // the AndroidOptions passed to onGetAndroidPixels to not specify
+                // a subset.
+                defaultOptions = *options;
+                defaultOptions.fSubset = nullptr;
+                options = &defaultOptions;
+            }
         }
 
-        if (SkIRect::MakeSize(adjustedInfo.dimensions()) == *options->fSubset) {
-            // The caller wants the whole thing, rather than a subset. Modify
-            // the AndroidOptions passed to onGetAndroidPixels to not specify
-            // a subset.
-            defaultOptions = *options;
-            defaultOptions.fSubset = nullptr;
-            options = &defaultOptions;
+        // To simplify frame compositing, force the client to use kIgnore and
+        // handle orientation themselves.
+        if (options->fFrameIndex != 0 && fOrientationBehavior == ExifOrientationBehavior::kRespect
+                && fCodec->getOrigin() != kDefault_SkEncodedOrigin) {
+            return SkCodec::kInvalidParameters;
         }
+    }
+
+    if (auto result = fCodec->handleFrameIndex(requestInfo, requestPixels, requestRowBytes,
+            *options, this); result != SkCodec::kSuccess) {
+        return result;
     }
 
     if (ExifOrientationBehavior::kIgnore == fOrientationBehavior) {

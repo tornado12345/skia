@@ -8,7 +8,7 @@
 #ifndef SKSL_ERRORREPORTER
 #define SKSL_ERRORREPORTER
 
-#include "SkSLPosition.h"
+#include "src/sksl/SkSLPosition.h"
 
 namespace SkSL {
 
@@ -28,6 +28,6 @@ public:
     virtual int errorCount() = 0;
 };
 
-} // namespace
+}  // namespace SkSL
 
 #endif

@@ -8,12 +8,14 @@
 #ifndef Window_unix_DEFINED
 #define Window_unix_DEFINED
 
-#include "../Window.h"
-#include "SkChecksum.h"
-#include "SkTDynamicHash.h"
+#include "include/private/SkChecksum.h"
+#include "src/core/SkTDynamicHash.h"
+#include "tools/sk_app/Window.h"
 
 #include <GL/glx.h>
 #include <X11/Xlib.h>
+
+#include <string>
 
 typedef Window XWindow;
 
@@ -35,6 +37,9 @@ public:
 
     void setTitle(const char*) override;
     void show() override;
+
+    const char* getClipboardText() override;
+    void        setClipboardText(const char*) override;
 
     bool attach(BackendType) override;
 
@@ -74,6 +79,8 @@ public:
         }
     }
 
+    void setRequestedDisplayParams(const DisplayParams&, bool allowReattach) override;
+
 private:
     void closeWindow();
 
@@ -90,6 +97,12 @@ private:
     int      fPendingWidth;
     int      fPendingHeight;
     bool     fPendingResize;
+
+    BackendType fBackend;
+
+    std::string fClipboardText;
+
+    using INHERITED = Window;
 };
 
 }   // namespace sk_app

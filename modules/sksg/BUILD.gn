@@ -10,13 +10,12 @@ config("public_config") {
 }
 
 component("sksg") {
+  check_includes = false
   import("sksg.gni")
   public_configs = [ ":public_config" ]
   sources = skia_sksg_sources
   configs += [ "../../:skia_private" ]
-  deps = [
-    "../..:skia",
-  ]
+  deps = [ "../..:skia" ]
 }
 
 if (defined(is_skia_standalone) && skia_enable_tools) {
@@ -27,9 +26,7 @@ if (defined(is_skia_standalone) && skia_enable_tools) {
       "../..:skia_private",
       "../..:tests_config",  # TODO: refactor to make this nicer
     ]
-    sources = [
-      "tests/SGTest.cpp",
-    ]
+    sources = [ "tests/SGTest.cpp" ]
     deps = [
       ":sksg",
       "../..:gpu_tool_utils",  # TODO: refactor to make this nicer
@@ -45,9 +42,7 @@ if (defined(is_skia_standalone) && skia_enable_tools) {
         "../..:skia_private",
         "../..:samples_config",  # TODO: refactor to make this nicer
       ]
-      sources = [
-        "samples/SampleSVGPong.cpp",
-      ]
+      sources = [ "samples/SampleSVGPong.cpp" ]
       deps = [
         ":sksg",
         "../..:samples",

@@ -5,26 +5,35 @@
 * found in the LICENSE file.
 */
 
-#include "SkShadowUtils.h"
-#include "SkBlurMask.h"
-#include "SkCanvas.h"
-#include "SkColorFilter.h"
-#include "SkColorData.h"
-#include "SkDevice.h"
-#include "SkDrawShadowInfo.h"
-#include "SkMaskFilter.h"
-#include "SkPath.h"
-#include "SkRandom.h"
-#include "SkRasterPipeline.h"
-#include "SkResourceCache.h"
-#include "SkShadowTessellator.h"
-#include "SkString.h"
-#include "SkTLazy.h"
-#include "SkVertices.h"
+#include "include/utils/SkShadowUtils.h"
+
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColorFilter.h"
+#include "include/core/SkMaskFilter.h"
+#include "include/core/SkPath.h"
+#include "include/core/SkString.h"
+#include "include/core/SkVertices.h"
+#include "include/private/SkColorData.h"
+#include "include/private/SkIDChangeListener.h"
+#include "include/private/SkTPin.h"
+#include "include/utils/SkRandom.h"
+#include "src/core/SkBlurMask.h"
+#include "src/core/SkColorFilterBase.h"
+#include "src/core/SkColorFilterPriv.h"
+#include "src/core/SkDevice.h"
+#include "src/core/SkDrawShadowInfo.h"
+#include "src/core/SkEffectPriv.h"
+#include "src/core/SkPathPriv.h"
+#include "src/core/SkRasterPipeline.h"
+#include "src/core/SkResourceCache.h"
+#include "src/core/SkTLazy.h"
+#include "src/core/SkVM.h"
+#include "src/core/SkVerticesPriv.h"
+#include "src/utils/SkShadowTessellator.h"
 #include <new>
 #if SK_SUPPORT_GPU
-#include "GrShape.h"
-#include "effects/GrBlurredEdgeFragmentProcessor.h"
+#include "src/gpu/effects/generated/GrBlurredEdgeFragmentProcessor.h"
+#include "src/gpu/geometry/GrStyledShape.h"
 #endif
 
 /**
@@ -33,42 +42,59 @@
 *                           Final result is black with alpha of Gaussian(B)*G.
 *                           The assumption is that the original color's alpha is 1.
 */
-class SkGaussianColorFilter : public SkColorFilter {
+class SkGaussianColorFilter : public SkColorFilterBase {
 public:
-    static sk_sp<SkColorFilter> Make() {
-        return sk_sp<SkColorFilter>(new SkGaussianColorFilter);
-    }
+    SkGaussianColorFilter() : INHERITED() {}
 
 #if SK_SUPPORT_GPU
-    std::unique_ptr<GrFragmentProcessor> asFragmentProcessor(
-            GrRecordingContext*, const GrColorSpaceInfo&) const override;
+    GrFPResult asFragmentProcessor(std::unique_ptr<GrFragmentProcessor> inputFP,
+                                   GrRecordingContext*, const GrColorInfo&) const override;
 #endif
 
 protected:
     void flatten(SkWriteBuffer&) const override {}
-    void onAppendStages(SkRasterPipeline* pipeline, SkColorSpace* dstCS, SkArenaAlloc* alloc,
-                        bool shaderIsOpaque) const override {
-        pipeline->append(SkRasterPipeline::gauss_a_to_rgba);
+    bool onAppendStages(const SkStageRec& rec, bool shaderIsOpaque) const override {
+        rec.fPipeline->append(SkRasterPipeline::gauss_a_to_rgba);
+        return true;
     }
+
+    skvm::Color onProgram(skvm::Builder* p, skvm::Color c, SkColorSpace* dstCS, skvm::Uniforms*,
+                          SkArenaAlloc*) const override {
+        // x = 1 - x;
+        // exp(-x * x * 4) - 0.018f;
+        // ... now approximate with quartic
+        //
+        skvm::F32 x = p->splat(-2.26661229133605957031f);
+                  x = c.a * x + 2.89795351028442382812f;
+                  x = c.a * x + 0.21345567703247070312f;
+                  x = c.a * x + 0.15489584207534790039f;
+                  x = c.a * x + 0.00030726194381713867f;
+        return {x, x, x, x};
+    }
+
 private:
     SK_FLATTENABLE_HOOKS(SkGaussianColorFilter)
 
-    SkGaussianColorFilter() : INHERITED() {}
-
-    typedef SkColorFilter INHERITED;
+    using INHERITED = SkColorFilterBase;
 };
 
 sk_sp<SkFlattenable> SkGaussianColorFilter::CreateProc(SkReadBuffer&) {
-    return Make();
+    return SkColorFilterPriv::MakeGaussian();
 }
 
 #if SK_SUPPORT_GPU
 
-std::unique_ptr<GrFragmentProcessor> SkGaussianColorFilter::asFragmentProcessor(
-        GrRecordingContext*, const GrColorSpaceInfo&) const {
-    return GrBlurredEdgeFragmentProcessor::Make(GrBlurredEdgeFragmentProcessor::Mode::kGaussian);
+GrFPResult SkGaussianColorFilter::asFragmentProcessor(std::unique_ptr<GrFragmentProcessor> inputFP,
+                                                      GrRecordingContext*,
+                                                      const GrColorInfo&) const {
+    return GrFPSuccess(GrBlurredEdgeFragmentProcessor::Make(
+                std::move(inputFP), GrBlurredEdgeFragmentProcessor::Mode::kGaussian));
 }
 #endif
+
+sk_sp<SkColorFilter> SkColorFilterPriv::MakeGaussian() {
+    return sk_sp<SkColorFilter>(new SkGaussianColorFilter);
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -147,7 +173,6 @@ struct SpotVerticesFactory {
                 return false;
         }
         SK_ABORT("Uninitialized occluder type?");
-        return false;
     }
 
     sk_sp<SkVertices> makeVertices(const SkPath& path, const SkMatrix& ctm,
@@ -372,12 +397,37 @@ private:
     const SkPath* fPath;
     const SkMatrix* fViewMatrix;
 #if SK_SUPPORT_GPU
-    GrShape fShapeForKey;
+    GrStyledShape fShapeForKey;
 #endif
 };
 
 // This creates a domain of keys in SkResourceCache used by this file.
 static void* kNamespace;
+
+// When the SkPathRef genID changes, invalidate a corresponding GrResource described by key.
+class ShadowInvalidator : public SkIDChangeListener {
+public:
+    ShadowInvalidator(const SkResourceCache::Key& key) {
+        fKey.reset(new uint8_t[key.size()]);
+        memcpy(fKey.get(), &key, key.size());
+    }
+
+private:
+    const SkResourceCache::Key& getKey() const {
+        return *reinterpret_cast<SkResourceCache::Key*>(fKey.get());
+    }
+
+    // always purge
+    static bool FindVisitor(const SkResourceCache::Rec&, void*) {
+        return false;
+    }
+
+    void changed() override {
+        SkResourceCache::Find(this->getKey(), ShadowInvalidator::FindVisitor, nullptr);
+    }
+
+    std::unique_ptr<uint8_t[]> fKey;
+};
 
 /**
  * Draws a shadow to 'canvas'. The vertices used to draw the shadow are created by 'factory' unless
@@ -386,7 +436,7 @@ static void* kNamespace;
 template <typename FACTORY>
 bool draw_shadow(const FACTORY& factory,
                  std::function<void(const SkVertices*, SkBlendMode, const SkPaint&,
-                 SkScalar tx, SkScalar ty)> drawProc, ShadowedPath& path, SkColor color) {
+                 SkScalar tx, SkScalar ty, bool)> drawProc, ShadowedPath& path, SkColor color) {
     FindContext<FACTORY> context(&path.viewMatrix(), &factory);
 
     SkResourceCache::Key* key = nullptr;
@@ -420,6 +470,7 @@ bool draw_shadow(const FACTORY& factory,
                 return false;
             }
             auto rec = new CachedTessellationsRec(*key, std::move(tessellations));
+            SkPathPriv::AddGenIDChangeListener(path.path(), sk_make_sp<ShadowInvalidator>(*key));
             SkResourceCache::Add(rec);
         } else {
             vertices = factory.makeVertices(path.path(), path.viewMatrix(),
@@ -434,15 +485,15 @@ bool draw_shadow(const FACTORY& factory,
     // Run the vertex color through a GaussianColorFilter and then modulate the grayscale result of
     // that against our 'color' param.
     paint.setColorFilter(
-         SkColorFilter::MakeModeFilter(color, SkBlendMode::kModulate)->makeComposed(
-                                                                    SkGaussianColorFilter::Make()));
+         SkColorFilters::Blend(color, SkBlendMode::kModulate)->makeComposed(
+                                                                SkColorFilterPriv::MakeGaussian()));
 
     drawProc(vertices.get(), SkBlendMode::kModulate, paint,
-             context.fTranslate.fX, context.fTranslate.fY);
+             context.fTranslate.fX, context.fTranslate.fY, path.viewMatrix().hasPerspective());
 
     return true;
 }
-}
+}  // namespace
 
 static bool tilted(const SkPoint3& zPlaneParams) {
     return !SkScalarNearlyZero(zPlaneParams.fX) || !SkScalarNearlyZero(zPlaneParams.fY);
@@ -467,8 +518,8 @@ void SkShadowUtils::ComputeTonalColors(SkColor inAmbientColor, SkColor inSpotCol
     int spotR = SkColorGetR(inSpotColor);
     int spotG = SkColorGetG(inSpotColor);
     int spotB = SkColorGetB(inSpotColor);
-    int max = SkTMax(SkTMax(spotR, spotG), spotB);
-    int min = SkTMin(SkTMin(spotR, spotG), spotB);
+    int max = std::max(std::max(spotR, spotG), spotB);
+    int min = std::min(std::min(spotR, spotG), spotB);
     SkScalar luminance = 0.5f*(max + min)/255.f;
     SkScalar origA = SkColorGetA(inSpotColor)/255.f;
 
@@ -539,11 +590,16 @@ static bool validate_rec(const SkDrawShadowRec& rec) {
 
 void SkBaseDevice::drawShadow(const SkPath& path, const SkDrawShadowRec& rec) {
     auto drawVertsProc = [this](const SkVertices* vertices, SkBlendMode mode, const SkPaint& paint,
-                                SkScalar tx, SkScalar ty) {
-        if (vertices->vertexCount()) {
-            SkAutoDeviceCTMRestore adr(this, SkMatrix::Concat(this->ctm(),
-                                                              SkMatrix::MakeTrans(tx, ty)));
-            this->drawVertices(vertices, nullptr, 0, mode, paint);
+                                SkScalar tx, SkScalar ty, bool hasPerspective) {
+        if (vertices->priv().vertexCount()) {
+            // For perspective shadows we've already computed the shadow in world space,
+            // and we can't translate it without changing it. Otherwise we concat the
+            // change in translation from the cached version.
+            SkAutoDeviceTransformRestore adr(
+                    this,
+                    hasPerspective ? SkMatrix::I()
+                                   : this->localToDevice() * SkMatrix::Translate(tx, ty));
+            this->drawVertices(vertices, mode, paint);
         }
     };
 
@@ -551,8 +607,8 @@ void SkBaseDevice::drawShadow(const SkPath& path, const SkDrawShadowRec& rec) {
         return;
     }
 
-    SkMatrix viewMatrix = this->ctm();
-    SkAutoDeviceCTMRestore adr(this, SkMatrix::I());
+    SkMatrix viewMatrix = this->localToDevice();
+    SkAutoDeviceTransformRestore adr(this, SkMatrix::I());
 
     ShadowedPath shadowedPath(&path, &viewMatrix);
 
@@ -575,10 +631,10 @@ void SkBaseDevice::drawShadow(const SkPath& path, const SkDrawShadowRec& rec) {
                 // Run the vertex color through a GaussianColorFilter and then modulate the
                 // grayscale result of that against our 'color' param.
                 paint.setColorFilter(
-                    SkColorFilter::MakeModeFilter(rec.fAmbientColor,
+                    SkColorFilters::Blend(rec.fAmbientColor,
                                                   SkBlendMode::kModulate)->makeComposed(
-                                                                   SkGaussianColorFilter::Make()));
-                this->drawVertices(vertices.get(), nullptr, 0, SkBlendMode::kModulate, paint);
+                                                               SkColorFilterPriv::MakeGaussian()));
+                this->drawVertices(vertices.get(), SkBlendMode::kModulate, paint);
                 success = true;
             }
         }
@@ -598,6 +654,7 @@ void SkBaseDevice::drawShadow(const SkPath& path, const SkDrawShadowRec& rec) {
                 // Pretransform the path to avoid transforming the stroke, below.
                 SkPath devSpacePath;
                 path.transform(viewMatrix, &devSpacePath);
+                devSpacePath.setIsVolatile(true);
 
                 // The tesselator outsets by AmbientBlurRadius (or 'r') to get the outer ring of
                 // the tesselation, and sets the alpha on the path to 1/AmbientRecipAlpha (or 'a').
@@ -655,10 +712,10 @@ void SkBaseDevice::drawShadow(const SkPath& path, const SkDrawShadowRec& rec) {
                 // Run the vertex color through a GaussianColorFilter and then modulate the
                 // grayscale result of that against our 'color' param.
                 paint.setColorFilter(
-                    SkColorFilter::MakeModeFilter(rec.fSpotColor,
+                    SkColorFilters::Blend(rec.fSpotColor,
                                                   SkBlendMode::kModulate)->makeComposed(
-                                                      SkGaussianColorFilter::Make()));
-                this->drawVertices(vertices.get(), nullptr, 0, SkBlendMode::kModulate, paint);
+                                                      SkColorFilterPriv::MakeGaussian()));
+                this->drawVertices(vertices.get(), SkBlendMode::kModulate, paint);
                 success = true;
             }
         }
@@ -719,7 +776,7 @@ void SkBaseDevice::drawShadow(const SkPath& path, const SkDrawShadowRec& rec) {
                                                                  &shadowMatrix, &radius)) {
                     return;
                 }
-                SkAutoDeviceCTMRestore adr(this, shadowMatrix);
+                SkAutoDeviceTransformRestore adr(this, shadowMatrix);
 
                 SkPaint paint;
                 paint.setColor(rec.fSpotColor);

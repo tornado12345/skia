@@ -6,16 +6,16 @@
  *
  */
 
-#include "GrBackendSurface.h"
-#include "GrContext.h"
+#include "include/gpu/GrBackendSurface.h"
+#include "include/gpu/GrDirectContext.h"
 #include "SDL.h"
-#include "SkCanvas.h"
-#include "SkFont.h"
-#include "SkRandom.h"
-#include "SkSurface.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkFont.h"
+#include "include/core/SkSurface.h"
+#include "include/utils/SkRandom.h"
 
-#include "gl/GrGLInterface.h"
-#include "gl/GrGLUtil.h"
+#include "include/gpu/gl/GrGLInterface.h"
+#include "src/gpu/gl/GrGLUtil.h"
 
 #if defined(SK_BUILD_FOR_ANDROID)
 #include <GLES/gl.h>
@@ -97,7 +97,7 @@ static SkPath create_star() {
     for (int i = 0; i < kNumPoints; ++i) {
         concavePath.lineTo(points[(2 * i) % kNumPoints]);
     }
-    concavePath.setFillType(SkPath::kEvenOdd_FillType);
+    concavePath.setFillType(SkPathFillType::kEvenOdd);
     SkASSERT(!concavePath.isConvex());
     concavePath.close();
     return concavePath;
@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
     auto interface = GrGLMakeNativeInterface();
 
     // setup contexts
-    sk_sp<GrContext> grContext(GrContext::MakeGL(interface));
+    sk_sp<GrDirectContext> grContext(GrDirectContext::MakeGL(interface));
     SkASSERT(grContext);
 
     // Wrap the frame buffer object attached to the screen in a Skia render target so Skia can
@@ -229,8 +229,8 @@ int main(int argc, char** argv) {
     // setup SkSurface
     // To use distance field text, use commented out SkSurfaceProps instead
     // SkSurfaceProps props(SkSurfaceProps::kUseDeviceIndependentFonts_Flag,
-    //                      SkSurfaceProps::kLegacyFontHost_InitType);
-    SkSurfaceProps props(SkSurfaceProps::kLegacyFontHost_InitType);
+    //                      SkSurfaceProps::kUnknown_SkPixelGeometry);
+    SkSurfaceProps props;
 
     sk_sp<SkSurface> surface(SkSurface::MakeFromBackendRenderTarget(grContext.get(), target,
                                                                     kBottomLeft_GrSurfaceOrigin,

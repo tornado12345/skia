@@ -5,12 +5,12 @@
  * found in the LICENSE file.
  */
 
-#include "SkRefCnt.h"
+#include "include/core/SkRefCnt.h"
 
 #ifndef SkWGL_DEFINED
 #define SkWGL_DEFINED
 
-#include "SkLeanWindows.h"
+#include "src/core/SkLeanWindows.h"
 
 /**
  * Working with WGL extensions can be a pain. Among the reasons is that You must
@@ -148,7 +148,7 @@ public:
     static sk_sp<SkWGLPbufferContext> Create(HDC parentDC, SkWGLContextRequest contextType,
                                              HGLRC shareContext);
 
-    virtual ~SkWGLPbufferContext();
+    ~SkWGLPbufferContext() override;
 
     HDC getDC() const { return fDC; }
     HGLRC getGLRC() const { return fGLRC; }

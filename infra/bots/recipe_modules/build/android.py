@@ -5,6 +5,7 @@
 
 import re
 
+from . import util
 
 def compile_fn(api, checkout_root, out_dir):
   skia_dir      = checkout_root.join('skia')
@@ -31,8 +32,9 @@ def compile_fn(api, checkout_root, out_dir):
 
   quote = lambda x: '"%s"' % x
   args = {
-      'ndk': quote(api.vars.slave_dir.join(ndk_path)),
+      'ndk': quote(api.vars.workdir.join(ndk_path)),
       'target_cpu': quote(target_arch),
+      'werror': 'true',
   }
   extra_cflags.append('-DDUMMY_ndk_version=%s' %
                       api.run.asset_version(ndk_asset, skia_dir))
@@ -42,10 +44,11 @@ def compile_fn(api, checkout_root, out_dir):
   if 'Vulkan' in extra_tokens:
     args['ndk_api'] = 24
     args['skia_enable_vulkan_debug_layers'] = 'false'
+    args['skia_use_gl'] = 'false'
   if 'ASAN' in extra_tokens:
     args['sanitize'] = '"ASAN"'
-    if target_arch == 'arm' and 'ndk_api' not in args:
-      args['ndk_api'] = 21
+  if 'Wuffs' in extra_tokens:
+    args['skia_use_wuffs'] = 'true'
 
   # If an Android API level is specified, use that.
   for t in extra_tokens:
@@ -77,8 +80,8 @@ def compile_fn(api, checkout_root, out_dir):
       # Build the APK.
       ndk_asset = 'android_ndk_linux'
       sdk_asset = 'android_sdk_linux'
-      android_ndk = api.vars.slave_dir.join(ndk_asset)
-      android_home = api.vars.slave_dir.join(sdk_asset, 'android-sdk')
+      android_ndk = api.vars.workdir.join(ndk_asset)
+      android_home = api.vars.workdir.join(sdk_asset, 'android-sdk')
       env = {
         'ANDROID_NDK': android_ndk,
         'ANDROID_HOME': android_home,
@@ -94,5 +97,13 @@ def compile_fn(api, checkout_root, out_dir):
       api.run(api.step, 'ninja', cmd=['ninja', '-C', out_dir])
 
 
-def copy_extra_build_products(api, src, dst):
-  pass
+ANDROID_BUILD_PRODUCTS_LIST = [
+  'dm',
+  'nanobench',
+  'skpbench',
+]
+
+
+def copy_build_products(api, src, dst):
+  """Copy Android build products from src to dst."""
+  util.copy_listed_files(api, src, dst, ANDROID_BUILD_PRODUCTS_LIST)

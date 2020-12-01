@@ -5,14 +5,38 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
-#include "sk_tool_utils.h"
+#include "gm/gm.h"
+#include "include/core/SkBitmap.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkFont.h"
+#include "include/core/SkFontTypes.h"
+#include "include/core/SkImage.h"
+#include "include/core/SkImageInfo.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkPoint.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkRefCnt.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/core/SkSurface.h"
+#include "include/core/SkTypeface.h"
+#include "include/core/SkTypes.h"
+#include "include/gpu/GrDirectContext.h"
+#include "include/gpu/GrRecordingContext.h"
+#include "include/gpu/GrTypes.h"
+#include "include/private/SkTArray.h"
+#include "src/gpu/GrDirectContextPriv.h"
+#include "src/image/SkImage_Base.h"
+#include "src/image/SkImage_Gpu.h"
+#include "tools/ToolUtils.h"
+#include "tools/gpu/ProxyUtils.h"
 
-#include "SkSurface.h"
+#include <string.h>
+#include <utility>
 
-#include "GrContextPriv.h"
-#include "ProxyUtils.h"
-#include "SkImage_Gpu.h"
+class GrRenderTargetContext;
 
 static const int kNumMatrices = 6;
 static const int kImageSize = 128;
@@ -57,18 +81,18 @@ static const SkMatrix kUVMatrices[kNumMatrices] = {
 
 
 // Create a fixed size text label like "LL" or "LR".
-static sk_sp<SkImage> make_text_image(GrContext* context, const char* text, SkColor color) {
+static sk_sp<SkImage> make_text_image(GrDirectContext* direct, const char* text, SkColor color) {
     SkPaint paint;
     paint.setAntiAlias(true);
     paint.setColor(color);
 
     SkFont font;
     font.setEdging(SkFont::Edging::kAntiAlias);
-    font.setTypeface(sk_tool_utils::create_portable_typeface());
+    font.setTypeface(ToolUtils::create_portable_typeface());
     font.setSize(32);
 
     SkRect bounds;
-    font.measureText(text, strlen(text), kUTF8_SkTextEncoding, &bounds);
+    font.measureText(text, strlen(text), SkTextEncoding::kUTF8, &bounds);
     const SkMatrix mat = SkMatrix::MakeRectToRect(bounds, SkRect::MakeWH(kLabelSize, kLabelSize),
                                                   SkMatrix::kFill_ScaleToFit);
 
@@ -79,16 +103,16 @@ static sk_sp<SkImage> make_text_image(GrContext* context, const char* text, SkCo
 
     canvas->clear(SK_ColorWHITE);
     canvas->concat(mat);
-    canvas->drawSimpleText(text, strlen(text), kUTF8_SkTextEncoding, 0, 0, font, paint);
+    canvas->drawSimpleText(text, strlen(text), SkTextEncoding::kUTF8, 0, 0, font, paint);
 
     sk_sp<SkImage> image = surf->makeImageSnapshot();
 
-    return image->makeTextureImage(context, nullptr);
+    return image->makeTextureImage(direct);
 }
 
 // Create an image with each corner marked w/ "LL", "LR", etc., with the origin either bottom-left
 // or top-left.
-static sk_sp<SkImage> make_reference_image(GrContext* context,
+static sk_sp<SkImage> make_reference_image(GrDirectContext* context,
                                            const SkTArray<sk_sp<SkImage>>& labels,
                                            bool bottomLeftOrigin) {
     SkASSERT(kNumLabels == labels.count());
@@ -108,15 +132,14 @@ static sk_sp<SkImage> make_reference_image(GrContext* context,
 
     auto origin = bottomLeftOrigin ? kBottomLeft_GrSurfaceOrigin : kTopLeft_GrSurfaceOrigin;
 
-    auto proxy = sk_gpu_test::MakeTextureProxyFromData(context, false, kImageSize, kImageSize,
-                                                       bm.colorType(), origin, bm.getPixels(),
-                                                       bm.rowBytes());
-    if (!proxy) {
+    auto view = sk_gpu_test::MakeTextureProxyViewFromData(context, GrRenderable::kNo, origin,
+                                                          bm.info(), bm.getPixels(), bm.rowBytes());
+    if (!view) {
         return nullptr;
     }
 
-    return sk_make_sp<SkImage_Gpu>(sk_ref_sp(context), kNeedNewImageUniqueID, kOpaque_SkAlphaType,
-                                   std::move(proxy), nullptr);
+    return sk_make_sp<SkImage_Gpu>(sk_ref_sp(context), kNeedNewImageUniqueID, std::move(view),
+                                   ii.colorType(), kOpaque_SkAlphaType, nullptr);
 }
 
 // Here we're converting from a matrix that is intended for UVs to a matrix that is intended
@@ -145,8 +168,7 @@ public:
         this->setBGColor(0xFFCCCCCC);
     }
 
-protected:
-
+private:
     SkString onShortName() override {
         return SkString("flippity");
     }
@@ -192,23 +214,24 @@ protected:
         canvas->restore();
     }
 
-    void drawRow(GrContext* context, SkCanvas* canvas,
-                 bool bottomLeftImage, bool drawSubset, bool drawScaled) {
-
-        sk_sp<SkImage> referenceImage = make_reference_image(context, fLabels, bottomLeftImage);
+    void drawRow(SkCanvas* canvas, bool bottomLeftImage, bool drawSubset, bool drawScaled) {
 
         canvas->save();
             canvas->translate(kLabelSize, kLabelSize);
 
             for (int i = 0; i < kNumMatrices; ++i) {
-                this->drawImageWithMatrixAndLabels(canvas, referenceImage.get(), i,
-                                                   drawSubset, drawScaled);
+                this->drawImageWithMatrixAndLabels(canvas, fReferenceImages[bottomLeftImage].get(),
+                                                   i, drawSubset, drawScaled);
                 canvas->translate(kCellSize, 0);
             }
         canvas->restore();
     }
 
-    void makeLabels(GrContext* context) {
+    void makeLabels(GrDirectContext* direct) {
+        if (fLabels.count()) {
+            return;
+        }
+
         static const char* kLabelText[kNumLabels] = { "LL", "LR", "UL", "UR" };
 
         static const SkColor kLabelColors[kNumLabels] = {
@@ -218,35 +241,55 @@ protected:
             SK_ColorCYAN
         };
 
-        SkASSERT(!fLabels.count());
         for (int i = 0; i < kNumLabels; ++i) {
-            fLabels.push_back(make_text_image(context, kLabelText[i], kLabelColors[i]));
+            fLabels.push_back(make_text_image(direct, kLabelText[i], kLabelColors[i]));
         }
         SkASSERT(kNumLabels == fLabels.count());
     }
 
-    void onDraw(GrContext* context, GrRenderTargetContext*, SkCanvas* canvas) override {
+    DrawResult onGpuSetup(GrDirectContext* context, SkString* errorMsg) override {
+        if (!context || context->abandoned()) {
+            return DrawResult::kSkip;
+        }
+
         this->makeLabels(context);
+        fReferenceImages[0] = make_reference_image(context, fLabels, false);
+        fReferenceImages[1] = make_reference_image(context, fLabels, true);
+        if (!fReferenceImages[0] || !fReferenceImages[1]) {
+            *errorMsg = "Failed to create reference images.";
+            return DrawResult::kFail;
+        }
+
+        return DrawResult::kOk;
+    }
+
+    void onGpuTeardown() override {
+        fLabels.reset();
+        fReferenceImages[0] = fReferenceImages[1] = nullptr;
+    }
+
+    void onDraw(GrRecordingContext*, GrRenderTargetContext*, SkCanvas* canvas) override {
+        SkASSERT(fReferenceImages[0] && fReferenceImages[1]);
 
         canvas->save();
 
         // Top row gets TL image
-        this->drawRow(context, canvas, false, false, false);
+        this->drawRow(canvas, false, false, false);
 
         canvas->translate(0, kCellSize);
 
         // Bottom row gets BL image
-        this->drawRow(context, canvas, true, false, false);
+        this->drawRow(canvas, true, false, false);
 
         canvas->translate(0, kCellSize);
 
         // Third row gets subsets of BL images
-        this->drawRow(context, canvas, true, true, false);
+        this->drawRow(canvas, true, true, false);
 
         canvas->translate(0, kCellSize);
 
         // Fourth row gets scaled subsets of BL images
-        this->drawRow(context, canvas, true, true, true);
+        this->drawRow(canvas, true, true, true);
 
         canvas->restore();
 
@@ -261,8 +304,9 @@ protected:
 
 private:
     SkTArray<sk_sp<SkImage>> fLabels;
+    sk_sp<SkImage> fReferenceImages[2];
 
-    typedef GM INHERITED;
+    using INHERITED = GM;
 };
 
 DEF_GM(return new FlippityGM;)

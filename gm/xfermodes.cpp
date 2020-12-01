@@ -5,11 +5,25 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
-#include "sk_tool_utils.h"
-#include "SkBitmap.h"
-#include "SkShader.h"
-#include "SkTextUtils.h"
+#include "gm/gm.h"
+#include "include/core/SkBitmap.h"
+#include "include/core/SkBlendMode.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkFont.h"
+#include "include/core/SkImageInfo.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkShader.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/core/SkTileMode.h"
+#include "include/core/SkTypeface.h"
+#include "include/core/SkTypes.h"
+#include "include/utils/SkTextUtils.h"
+#include "tools/ToolUtils.h"
 
 enum SrcType {
     //! A WxH image with a rectangle in the lower right.
@@ -36,11 +50,11 @@ enum SrcType {
 const struct {
     SkBlendMode fMode;
     int         fSourceTypeMask;  // The source types to use this
-    // mode with. See draw_mode for
-    // an explanation of each type.
-    // PDF has to play some tricks
-    // to support the base modes,
-    // test those more extensively.
+                                  // mode with. See draw_mode for
+                                  // an explanation of each type.
+                                  // PDF has to play some tricks
+                                  // to support the base modes,
+                                  // test those more extensively.
 } gModes[] = {
     { SkBlendMode::kClear,        kAll_SrcType   },
     { SkBlendMode::kSrc,          kAll_SrcType   },
@@ -88,8 +102,8 @@ static void make_bitmaps(int w, int h, SkBitmap* src, SkBitmap* dst,
 
     {
         SkCanvas c(*src);
-        p.setColor(sk_tool_utils::color_to_565(0xFFFFCC44));
-        r.set(0, 0, ww*3/4, hh*3/4);
+        p.setColor(ToolUtils::color_to_565(0xFFFFCC44));
+        r.setWH(ww*3/4, hh*3/4);
         c.drawOval(r, p);
     }
 
@@ -98,8 +112,8 @@ static void make_bitmaps(int w, int h, SkBitmap* src, SkBitmap* dst,
 
     {
         SkCanvas c(*dst);
-        p.setColor(sk_tool_utils::color_to_565(0xFF66AAFF));
-        r.set(ww/3, hh/3, ww*19/20, hh*19/20);
+        p.setColor(ToolUtils::color_to_565(0xFF66AAFF));
+        r.setLTRB(ww/3, hh/3, ww*19/20, hh*19/20);
         c.drawRect(r, p);
     }
 
@@ -140,16 +154,16 @@ class XfermodesGM : public skiagm::GM {
                 canvas->saveLayer(&bounds, &p);
                 restoreNeeded = true;
                 p.setBlendMode(SkBlendMode::kSrcOver);
-                // Fall through.
+                [[fallthrough]];
             }
             case kQuarterClear_SrcType: {
                 SkScalar halfW = SkIntToScalar(W) / 2;
                 SkScalar halfH = SkIntToScalar(H) / 2;
-                p.setColor(sk_tool_utils::color_to_565(0xFF66AAFF));
+                p.setColor(ToolUtils::color_to_565(0xFF66AAFF));
                 SkRect r = SkRect::MakeXYWH(x + halfW, y, halfW,
                                             SkIntToScalar(H));
                 canvas->drawRect(r, p);
-                p.setColor(sk_tool_utils::color_to_565(0xFFAA66FF));
+                p.setColor(ToolUtils::color_to_565(0xFFAA66FF));
                 r = SkRect::MakeXYWH(x, y + halfH, SkIntToScalar(W), halfH);
                 canvas->drawRect(r, p);
                 break;
@@ -161,23 +175,23 @@ class XfermodesGM : public skiagm::GM {
                 SkScalar h = SkIntToScalar(H);
                 SkRect r = SkRect::MakeXYWH(x, y + h / 4, w, h * 23 / 60);
                 canvas->clipRect(r);
-                // Fall through.
+                [[fallthrough]];
             }
             case kRectangle_SrcType: {
                 SkScalar w = SkIntToScalar(W);
                 SkScalar h = SkIntToScalar(H);
                 SkRect r = SkRect::MakeXYWH(x + w / 3, y + h / 3,
                                             w * 37 / 60, h * 37 / 60);
-                p.setColor(sk_tool_utils::color_to_565(0xFF66AAFF));
+                p.setColor(ToolUtils::color_to_565(0xFF66AAFF));
                 canvas->drawRect(r, p);
                 break;
             }
             case kSmallRectangleImageWithAlpha_SrcType:
                 m.postScale(SK_ScalarHalf, SK_ScalarHalf, x, y);
-                // Fall through.
+                [[fallthrough]];
             case kRectangleImageWithAlpha_SrcType:
                 p.setAlpha(0x88);
-                // Fall through.
+                [[fallthrough]];
             case kRectangleImage_SrcType: {
                 SkAutoCanvasRestore acr(canvas, true);
                 canvas->concat(m);
@@ -222,13 +236,12 @@ protected:
         const SkScalar h = SkIntToScalar(H);
         SkMatrix m;
         m.setScale(SkIntToScalar(6), SkIntToScalar(6));
-        auto s = SkShader::MakeBitmapShader(fBG, SkShader::kRepeat_TileMode,
-                                            SkShader::kRepeat_TileMode, &m);
+        auto s = fBG.makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat, &m);
 
         SkPaint labelP;
         labelP.setAntiAlias(true);
 
-        SkFont font(sk_tool_utils::create_portable_typeface());
+        SkFont font(ToolUtils::create_portable_typeface());
 
         const int W = 5;
 
@@ -281,6 +294,6 @@ protected:
     }
 
 private:
-    typedef GM INHERITED;
+    using INHERITED = GM;
 };
 DEF_GM( return new XfermodesGM; )

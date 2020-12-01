@@ -8,10 +8,12 @@
 #ifndef GrGLSLFragmentProcessor_DEFINED
 #define GrGLSLFragmentProcessor_DEFINED
 
-#include "GrFragmentProcessor.h"
-#include "GrShaderVar.h"
-#include "glsl/GrGLSLProgramDataManager.h"
-#include "glsl/GrGLSLUniformHandler.h"
+#include "src/gpu/GrFragmentProcessor.h"
+#include "src/gpu/GrShaderVar.h"
+#include "src/gpu/glsl/GrGLSLPrimitiveProcessor.h"
+#include "src/gpu/glsl/GrGLSLProgramDataManager.h"
+#include "src/gpu/glsl/GrGLSLUniformHandler.h"
+#include "src/sksl/SkSLString.h"
 
 class GrProcessor;
 class GrProcessorKeyBuilder;
@@ -33,7 +35,7 @@ public:
 
 private:
     /**
-     * This class allows the shader builder to provide each GrGLSLFragmentProcesor with an array of
+     * This class allows the shader builder to provide each GrGLSLFragmentProcessor with an array of
      * generated variables where each generated variable corresponds to an element of an array on
      * the GrFragmentProcessor that generated the GLSLFP. For example, this is used to provide a
      * variable holding transformed coords for each GrCoordTransform owned by the FP.
@@ -51,16 +53,17 @@ private:
         int count() const { return (fFP->*COUNT)(); }
 
         BuilderInputProvider childInputs(int childIdx) const {
-            const GrFragmentProcessor* child = &fFP->childProcessor(childIdx);
-            GrFragmentProcessor::Iter iter(fFP);
+            const GrFragmentProcessor* child = fFP->childProcessor(childIdx);
+            SkASSERT(child);
             int numToSkip = 0;
-            while (true) {
-                const GrFragmentProcessor* fp = iter.next();
-                if (fp == child) {
+            for (const auto& fp : GrFragmentProcessor::FPRange(*fFP)) {
+                if (&fp == child) {
                     return BuilderInputProvider(child, fTs + numToSkip);
                 }
-                numToSkip += (fp->*COUNT)();
+                numToSkip += (fp.*COUNT)();
             }
+            SK_ABORT("Didn't find the child.");
+            return {nullptr, nullptr};
         }
 
     private:
@@ -70,9 +73,7 @@ private:
 
 public:
     using TransformedCoordVars =
-            BuilderInputProvider<GrShaderVar, &GrFragmentProcessor::numCoordTransforms>;
-    using TextureSamplers =
-            BuilderInputProvider<SamplerHandle, &GrFragmentProcessor::numTextureSamplers>;
+            BuilderInputProvider<GrShaderVar, &GrFragmentProcessor::numVaryingCoordsUsed>;
 
     /** Called when the program stage should insert its code into the shaders. The code in each
         shader will be in its own block ({}) and so locally scoped names will not collide across
@@ -91,11 +92,9 @@ public:
                                  (e.g. input color is solid white, trans black, known to be opaque,
                                  etc.) that allows the processor to communicate back similar known
                                  info about its output.
+        @param localCoord        The name of a local coord reference to a float2 variable.
         @param transformedCoords Fragment shader variables containing the coords computed using
                                  each of the GrFragmentProcessor's GrCoordTransforms.
-        @param texSamplers       Contains one entry for each TextureSampler  of the GrProcessor.
-                                 These can be passed to the builder to emit texture reads in the
-                                 generated code.
      */
     struct EmitArgs {
         EmitArgs(GrGLSLFPFragmentBuilder* fragBuilder,
@@ -104,24 +103,27 @@ public:
                  const GrFragmentProcessor& fp,
                  const char* outputColor,
                  const char* inputColor,
+                 const char* sampleCoord,
                  const TransformedCoordVars& transformedCoordVars,
-                 const TextureSamplers& textureSamplers)
+                 bool forceInline)
                 : fFragBuilder(fragBuilder)
                 , fUniformHandler(uniformHandler)
                 , fShaderCaps(caps)
                 , fFp(fp)
                 , fOutputColor(outputColor)
                 , fInputColor(inputColor ? inputColor : "half4(1.0)")
+                , fSampleCoord(sampleCoord)
                 , fTransformedCoords(transformedCoordVars)
-                , fTexSamplers(textureSamplers) {}
+                , fForceInline(forceInline) {}
         GrGLSLFPFragmentBuilder* fFragBuilder;
         GrGLSLUniformHandler* fUniformHandler;
         const GrShaderCaps* fShaderCaps;
         const GrFragmentProcessor& fFp;
         const char* fOutputColor;
         const char* fInputColor;
+        const char* fSampleCoord;
         const TransformedCoordVars& fTransformedCoords;
-        const TextureSamplers& fTexSamplers;
+        bool fForceInline;
     };
 
     virtual void emitCode(EmitArgs&) = 0;
@@ -132,52 +134,108 @@ public:
 
     int numChildProcessors() const { return fChildProcessors.count(); }
 
-    GrGLSLFragmentProcessor* childProcessor(int index) {
-        return fChildProcessors[index];
+    GrGLSLFragmentProcessor* childProcessor(int index) const { return fChildProcessors[index]; }
+
+    void emitChildFunction(int childIndex, EmitArgs& parentArgs);
+
+    // Invoke the child with the default input color (solid white)
+    inline SkString invokeChild(int childIndex, EmitArgs& parentArgs,
+                                SkSL::String skslCoords = "") {
+        return this->invokeChild(childIndex, nullptr, parentArgs, skslCoords);
     }
 
-    // Emit the child with the default input color (solid white)
-    inline void emitChild(int childIndex, SkString* outputColor, EmitArgs& parentArgs) {
-        this->emitChild(childIndex, nullptr, outputColor, parentArgs);
+    inline SkString invokeChildWithMatrix(int childIndex, EmitArgs& parentArgs,
+                                          SkSL::String skslMatrix = "") {
+        return this->invokeChildWithMatrix(childIndex, nullptr, parentArgs, skslMatrix);
     }
 
-    /** Will emit the code of a child proc in its own scope. Pass in the parent's EmitArgs and
-     *  emitChild will automatically extract the coords and samplers of that child and pass them
-     *  on to the child's emitCode(). Also, any uniforms or functions emitted by the child will
-     *  have their names mangled to prevent redefinitions. The output color name is also mangled
-     *  therefore in an in/out param. It will be declared in mangled form by emitChild(). It is
-     *  legal to pass nullptr as inputColor, since all fragment processors are required to work
-     *  without an input color.
+    /** Invokes a child proc in its own scope. Pass in the parent's EmitArgs and invokeChild will
+     *  automatically extract the coords and samplers of that child and pass them on to the child's
+     *  emitCode(). Also, any uniforms or functions emitted by the child will have their names
+     *  mangled to prevent redefinitions. The returned string contains the output color (as a call
+     *  to the child's helper function). It is legal to pass nullptr as inputColor, since all
+     *  fragment processors are required to work without an input color.
+     *
+     *  When skslCoords is empty, invokeChild corresponds to a call to "sample(child, color)"
+     *  in SkSL. When skslCoords is not empty, invokeChild corresponds to a call to
+     *  "sample(child, color, float2)", where skslCoords is an SkSL expression that evaluates to a
+     *  float2 and is passed in as the 3rd argument.
      */
-    void emitChild(int childIndex, const char* inputColor, SkString* outputColor,
-                   EmitArgs& parentArgs);
+    SkString invokeChild(int childIndex, const char* inputColor, EmitArgs& parentArgs,
+                         SkSL::String skslCoords = "");
 
-    // Use the parent's output color to hold child's output, and use the
-    // default input color of solid white
-    inline void emitChild(int childIndex, EmitArgs& args) {
-        // null pointer cast required to disambiguate the function call
-        this->emitChild(childIndex, (const char*) nullptr, args);
-    }
-
-    /** Variation that uses the parent's output color variable to hold the child's output.*/
-    void emitChild(int childIndex, const char* inputColor, EmitArgs& parentArgs);
+    /**
+     * As invokeChild, but transforms the coordinates according to the provided matrix. This variant
+     * corresponds to a call of "sample(child, color, matrix)" in SkSL, where skslMatrix is an SkSL
+     * expression that evaluates to a float3x3 and is passed in as the 3rd argument.
+     *
+     * If skslMatrix is the empty string, then it is automatically replaced with the expression
+     * attached to the child's SampleUsage object. This is only valid if the child is sampled with
+     * a const-uniform matrix. If the sample matrix is const-or-uniform, the expression will be
+     * automatically resolved to the mangled uniform name.
+     */
+    SkString invokeChildWithMatrix(int childIndex, const char* inputColor, EmitArgs& parentArgs,
+                                   SkSL::String skslMatrix = "");
 
     /**
      * Pre-order traversal of a GLSLFP hierarchy, or of multiple trees with roots in an array of
-     * GLSLFPS. This agrees with the traversal order of GrFragmentProcessor::Iter
+     * GLSLFPS. If initialized with an array color followed by coverage processors installed in a
+     * program thenthe iteration order will agree with a GrFragmentProcessor::Iter initialized with
+     * a GrPipeline that produces the same program key.
      */
-    class Iter : public SkNoncopyable {
+    class Iter {
     public:
-        explicit Iter(GrGLSLFragmentProcessor* fp) { fFPStack.push_back(fp); }
-        explicit Iter(std::unique_ptr<GrGLSLFragmentProcessor> fps[], int cnt) {
-            for (int i = cnt - 1; i >= 0; --i) {
-                fFPStack.push_back(fps[i].get());
-            }
-        }
-        GrGLSLFragmentProcessor* next();
+        Iter(std::unique_ptr<GrGLSLFragmentProcessor> fps[], int cnt);
+        Iter(GrGLSLFragmentProcessor& fp) { fFPStack.push_back(&fp); }
+
+        GrGLSLFragmentProcessor& operator*() const;
+        GrGLSLFragmentProcessor* operator->() const;
+        Iter& operator++();
+        operator bool() const { return !fFPStack.empty(); }
+
+        // Because each iterator carries a stack we want to avoid copies.
+        Iter(const Iter&) = delete;
+        Iter& operator=(const Iter&) = delete;
 
     private:
         SkSTArray<4, GrGLSLFragmentProcessor*, true> fFPStack;
+    };
+
+    class ParallelIterEnd {};
+
+    /**
+     * Walks parallel trees of GrFragmentProcessor and associated GrGLSLFragmentProcessors. The
+     * GrGLSLFragmentProcessor used to initialize the iterator must have been created by calling
+     * GrFragmentProcessor::createGLSLInstance() on the passed GrFragmentProcessor.
+     */
+    class ParallelIter {
+    public:
+        ParallelIter(const GrFragmentProcessor& fp, GrGLSLFragmentProcessor& glslFP);
+
+        ParallelIter& operator++();
+
+        std::tuple<const GrFragmentProcessor&, GrGLSLFragmentProcessor&> operator*() const;
+
+        bool operator==(const ParallelIterEnd& end) const;
+
+        bool operator!=(const ParallelIterEnd& end) const { return !(*this == end); }
+
+    private:
+        GrFragmentProcessor::CIter fpIter;
+        GrGLSLFragmentProcessor::Iter glslIter;
+    };
+
+    class ParallelRange {
+    public:
+        ParallelRange(const GrFragmentProcessor& fp, GrGLSLFragmentProcessor& glslFP);
+
+        ParallelIter begin() { return {fInitialFP, fInitialGLSLFP}; }
+
+        ParallelIterEnd end() { return {}; }
+
+    private:
+        const GrFragmentProcessor& fInitialFP;
+        GrGLSLFragmentProcessor& fInitialGLSLFP;
     };
 
 protected:
@@ -189,7 +247,8 @@ protected:
     virtual void onSetData(const GrGLSLProgramDataManager&, const GrFragmentProcessor&) {}
 
 private:
-    void internalEmitChild(int, const char*, const char*, EmitArgs&);
+    // one per child; either not present or empty string if not yet emitted
+    SkTArray<SkString> fFunctionNames;
 
     SkTArray<GrGLSLFragmentProcessor*, true> fChildProcessors;
 

@@ -8,12 +8,14 @@
 #ifndef SKSL_HCODEGENERATOR
 #define SKSL_HCODEGENERATOR
 
-#include "SkSLCodeGenerator.h"
-#include "SkSLSectionAndParameterHelper.h"
-#include "ir/SkSLType.h"
-#include "ir/SkSLVariable.h"
+#include "src/sksl/SkSLCodeGenerator.h"
+#include "src/sksl/SkSLSectionAndParameterHelper.h"
+#include "src/sksl/ir/SkSLType.h"
+#include "src/sksl/ir/SkSLVariable.h"
 
 #include <cctype>
+
+#if defined(SKSL_STANDALONE) || GR_TEST_UTILS
 
 constexpr const char* kFragmentProcessorHeader =
 R"(
@@ -42,7 +44,7 @@ public:
     static String AccessType(const Context& context, const Type& type, const Layout& layout);
 
     static String FieldName(const char* varName) {
-        return String::printf("f%c%s", toupper(varName[0]), varName + 1);
+        return String(varName);
     }
 
     static String CoordTransformName(const String& arg, int index) {
@@ -78,9 +80,11 @@ private:
     String fFullName;
     SectionAndParameterHelper fSectionAndParameterHelper;
 
-    typedef CodeGenerator INHERITED;
+    using INHERITED = CodeGenerator;
 };
 
 } // namespace SkSL
 
-#endif
+#endif // defined(SKSL_STANDALONE) || GR_TEST_UTILS
+
+#endif // SKSL_HCODEGENERATOR

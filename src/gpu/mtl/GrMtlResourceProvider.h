@@ -8,30 +8,39 @@
 #ifndef GrMtlResourceProvider_DEFINED
 #define GrMtlResourceProvider_DEFINED
 
-#include "GrMtlCopyPipelineState.h"
-#include "GrMtlPipelineStateBuilder.h"
-#include "SkLRUCache.h"
-#include "SkTArray.h"
+#include "include/private/SkSpinlock.h"
+#include "include/private/SkTArray.h"
+#include "src/core/SkLRUCache.h"
+#include "src/gpu/GrProgramDesc.h"
+#include "src/gpu/mtl/GrMtlDepthStencil.h"
+#include "src/gpu/mtl/GrMtlPipelineStateBuilder.h"
+#include "src/gpu/mtl/GrMtlSampler.h"
 
-#import <metal/metal.h>
+#import <Metal/Metal.h>
 
 class GrMtlGpu;
+class GrMtlCommandBuffer;
 
 class GrMtlResourceProvider {
 public:
     GrMtlResourceProvider(GrMtlGpu* gpu);
 
-    GrMtlCopyPipelineState* findOrCreateCopyPipelineState(MTLPixelFormat dstPixelFormat,
-                                                          id<MTLFunction> vertexFunction,
-                                                          id<MTLFunction> fragmentFunction,
-                                                          MTLVertexDescriptor* vertexDescriptor);
+    GrMtlPipelineState* findOrCreateCompatiblePipelineState(GrRenderTarget*,
+                                                            const GrProgramInfo&);
 
-    GrMtlPipelineState* findOrCreateCompatiblePipelineState(
-        GrRenderTarget*, GrSurfaceOrigin,
-        const GrPipeline&,
-        const GrPrimitiveProcessor&,
-        const GrTextureProxy* const primProcProxies[],
-        GrPrimitiveType);
+    // Finds or creates a compatible MTLDepthStencilState based on the GrStencilSettings.
+    GrMtlDepthStencil* findOrCreateCompatibleDepthStencilState(const GrStencilSettings&,
+                                                               GrSurfaceOrigin);
+
+    // Finds or creates a compatible MTLSamplerState based on the GrSamplerState.
+    GrMtlSampler* findOrCreateCompatibleSampler(GrSamplerState);
+
+    // Destroy any cached resources. To be called before releasing the MtlDevice.
+    void destroyResources();
+
+#if GR_TEST_UTILS
+    void resetShaderCacheForTesting() const { fPipelineStateCache->release(); }
+#endif
 
 private:
 #ifdef SK_DEBUG
@@ -43,19 +52,10 @@ private:
         PipelineStateCache(GrMtlGpu* gpu);
         ~PipelineStateCache();
 
-        GrMtlPipelineState* refPipelineState(GrRenderTarget*, GrSurfaceOrigin,
-                                             const GrPrimitiveProcessor&,
-                                             const GrTextureProxy* const primProcProxies[],
-                                             const GrPipeline&,
-                                             GrPrimitiveType);
+        void release();
+        GrMtlPipelineState* refPipelineState(GrRenderTarget*, const GrProgramInfo&);
 
     private:
-        enum {
-            // We may actually have kMaxEntries+1 PipelineStates in context because we create a new
-            // PipelineState before evicting from the cache.
-            kMaxEntries = 128,
-        };
-
         struct Entry;
 
         struct DescHash {
@@ -64,9 +64,9 @@ private:
             }
         };
 
-        SkLRUCache<const GrMtlPipelineStateBuilder::Desc, std::unique_ptr<Entry>, DescHash> fMap;
+        SkLRUCache<const GrProgramDesc, std::unique_ptr<Entry>, DescHash> fMap;
 
-        GrMtlGpu*                    fGpu;
+        GrMtlGpu*                   fGpu;
 
 #ifdef GR_PIPELINE_STATE_CACHE_STATS
         int                         fTotalRequests;
@@ -74,12 +74,13 @@ private:
 #endif
     };
 
-    SkTArray<std::unique_ptr<GrMtlCopyPipelineState>> fCopyPipelineStateCache;
-
     GrMtlGpu* fGpu;
 
     // Cache of GrMtlPipelineStates
     std::unique_ptr<PipelineStateCache> fPipelineStateCache;
+
+    SkTDynamicHash<GrMtlSampler, GrMtlSampler::Key> fSamplers;
+    SkTDynamicHash<GrMtlDepthStencil, GrMtlDepthStencil::Key> fDepthStencilStates;
 };
 
 #endif

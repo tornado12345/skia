@@ -30,7 +30,7 @@ appear here first.
 
   Code search option  |Search |XRef |History |Repos                         |Branches |Freshness
   --------------------|-------|-----|--------|------------------------------|---------|---------------
-  [cs.skia.org][1]    |regexp | yes |yes     |skia                          |master   |last DEPS roll
+  [cs.skia.org][1]    |regexp | yes |yes     |skia [buildbot][5]            |master   |last DEPS roll
   [Internal][2]       |regexp | no  |yes     |skia buildbot common internal |master   |hours
   [Github][3]         |basic  | no  |yes     |skia buildbot                 |all      |hour
   [googlesource][4]   |none   | no  |yes     |all                           |all      |N/A
@@ -38,7 +38,8 @@ appear here first.
 [1]: http://cs.skia.org/             "Chromium code search"
 [2]: http://cs/#skia/                "Internal Code Search"
 [3]: https://github.com/google/skia  "Github mirror of skia"
-[4]: https://skia.googlesource.com/  "Master Skia repos on googlesource.com"
+[4]: https://skia.googlesource.com/  "Primary Skia repos on googlesource.com"
+[5]: https://cs.chromium.org/chromium/skia/buildbot/
 
 Client code search
 ------------------

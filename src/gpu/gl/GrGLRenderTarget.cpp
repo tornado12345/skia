@@ -5,14 +5,15 @@
  * found in the LICENSE file.
  */
 
-#include "GrGLRenderTarget.h"
-#include "GrContext.h"
-#include "GrContextPriv.h"
-#include "GrGLGpu.h"
-#include "GrGLUtil.h"
-#include "GrGpuResourcePriv.h"
-#include "GrRenderTargetPriv.h"
-#include "SkTraceMemoryDump.h"
+#include "src/gpu/gl/GrGLRenderTarget.h"
+
+#include "include/core/SkTraceMemoryDump.h"
+#include "include/gpu/GrDirectContext.h"
+#include "src/gpu/GrBackendUtils.h"
+#include "src/gpu/GrDirectContextPriv.h"
+#include "src/gpu/GrGpuResourcePriv.h"
+#include "src/gpu/gl/GrGLGpu.h"
+#include "src/gpu/gl/GrGLUtil.h"
 
 #define GPUGL static_cast<GrGLGpu*>(this->getGpu())
 #define GL_CALL(X) GR_GL_CALL(GPUGL->glInterface(), X)
@@ -20,99 +21,112 @@
 // Because this class is virtually derived from GrSurface we must explicitly call its constructor.
 // Constructor for wrapped render targets.
 GrGLRenderTarget::GrGLRenderTarget(GrGLGpu* gpu,
-                                   const GrSurfaceDesc& desc,
-                                   GrGLenum format,
-                                   const IDDesc& idDesc,
-                                   GrGLStencilAttachment* stencil)
-    : GrSurface(gpu, desc)
-    , INHERITED(gpu, desc, stencil) {
-    this->setFlags(gpu->glCaps(), idDesc);
-    this->init(desc, format, idDesc);
+                                   const SkISize& dimensions,
+                                   GrGLFormat format,
+                                   int sampleCount,
+                                   const IDs& ids,
+                                   GrGLAttachment* stencil)
+        : GrSurface(gpu, dimensions, GrProtected::kNo)
+        , INHERITED(gpu, dimensions, sampleCount, GrProtected::kNo, stencil) {
+    this->setFlags(gpu->glCaps(), ids);
+    this->init(format, ids);
     this->registerWithCacheWrapped(GrWrapCacheable::kNo);
 }
 
-GrGLRenderTarget::GrGLRenderTarget(GrGLGpu* gpu, const GrSurfaceDesc& desc, GrGLenum format,
-                                   const IDDesc& idDesc)
-    : GrSurface(gpu, desc)
-    , INHERITED(gpu, desc) {
-    this->setFlags(gpu->glCaps(), idDesc);
-    this->init(desc, format, idDesc);
+GrGLRenderTarget::GrGLRenderTarget(GrGLGpu* gpu,
+                                   const SkISize& dimensions,
+                                   GrGLFormat format,
+                                   int sampleCount,
+                                   const IDs& ids)
+        : GrSurface(gpu, dimensions, GrProtected::kNo)
+        , INHERITED(gpu, dimensions, sampleCount, GrProtected::kNo) {
+    this->setFlags(gpu->glCaps(), ids);
+    this->init(format, ids);
 }
 
-inline void GrGLRenderTarget::setFlags(const GrGLCaps& glCaps, const IDDesc& idDesc) {
-    if (idDesc.fIsMixedSampled) {
-        SkASSERT(glCaps.usesMixedSamples() && idDesc.fRTFBOID); // FBO 0 can't be mixed sampled.
-        this->setHasMixedSamples();
-    }
+inline void GrGLRenderTarget::setFlags(const GrGLCaps& glCaps, const IDs& idDesc) {
     if (!idDesc.fRTFBOID) {
         this->setGLRTFBOIDIs0();
     }
 }
 
-void GrGLRenderTarget::init(const GrSurfaceDesc& desc, GrGLenum format, const IDDesc& idDesc) {
-    fRTFBOID                = idDesc.fRTFBOID;
-    fTexFBOID               = idDesc.fTexFBOID;
-    fMSColorRenderbufferID  = idDesc.fMSColorRenderbufferID;
-    fRTFBOOwnership         = idDesc.fRTFBOOwnership;
-
-    fRTFormat               = format;
-
-    fViewport.fLeft   = 0;
-    fViewport.fBottom = 0;
-    fViewport.fWidth  = desc.fWidth;
-    fViewport.fHeight = desc.fHeight;
-
+void GrGLRenderTarget::init(GrGLFormat format, const IDs& idDesc) {
+     fRTFBOID                = idDesc.fRTFBOID;
+     fTexFBOID               = idDesc.fTexFBOID;
+     fMSColorRenderbufferID  = idDesc.fMSColorRenderbufferID;
+     fRTFBOOwnership         = idDesc.fRTFBOOwnership;
+     fRTFormat               = format;
     fNumSamplesOwnedPerPixel = this->totalSamples();
 }
 
-sk_sp<GrGLRenderTarget> GrGLRenderTarget::MakeWrapped(GrGLGpu* gpu,
-                                                      const GrSurfaceDesc& desc,
-                                                      GrGLenum format,
-                                                      const IDDesc& idDesc,
-                                                      int stencilBits) {
-    GrGLStencilAttachment* sb = nullptr;
-    if (stencilBits) {
-        GrGLStencilAttachment::IDDesc sbDesc;
-        GrGLStencilAttachment::Format format;
-        format.fInternalFormat = GrGLStencilAttachment::kUnknownInternalFormat;
-        format.fPacked = false;
-        format.fStencilBits = stencilBits;
-        format.fTotalBits = stencilBits;
-        // Ownership of sb is passed to the GrRenderTarget so doesn't need to be deleted
-        sb = new GrGLStencilAttachment(gpu, sbDesc, desc.fWidth, desc.fHeight,
-                                       desc.fSampleCnt, format);
+GrGLFormat stencil_bits_to_format(int stencilBits) {
+    SkASSERT(stencilBits);
+    switch (stencilBits) {
+        case 8:
+            // We pick the packed format here so when we query total size we are at least not
+            // underestimating the total size of the stencil buffer. However, in reality this
+            // rarely matters since we usually don't care about the size of wrapped objects.
+            return GrGLFormat::kDEPTH24_STENCIL8;
+        case 16:
+            return GrGLFormat::kSTENCIL_INDEX16;
+        default:
+            SkASSERT(false);
+            return GrGLFormat::kUnknown;
     }
-    return sk_sp<GrGLRenderTarget>(new GrGLRenderTarget(gpu, desc, format, idDesc, sb));
+}
+
+sk_sp<GrGLRenderTarget> GrGLRenderTarget::MakeWrapped(GrGLGpu* gpu,
+                                                      const SkISize& dimensions,
+                                                      GrGLFormat format,
+                                                      int sampleCount,
+                                                      const IDs& idDesc,
+                                                      int stencilBits) {
+    GrGLAttachment* sb = nullptr;
+    if (stencilBits) {
+        GrGLAttachment::IDDesc sbDesc;
+        // We pick a "fake" actual format that matches the number of stencil bits. When wrapping
+        // an FBO with some number of stencil bits all we care about in the future is that we have
+        // a format with the same number of stencil bits. We don't even directly use the format or
+        // any other properties. Thus it is fine for us to just assign an arbitrary format that
+        // matches the stencil bit count.
+        GrGLFormat sFmt = stencil_bits_to_format(stencilBits);
+
+        // Ownership of sb is passed to the GrRenderTarget so doesn't need to be deleted
+        sb = new GrGLAttachment(gpu, sbDesc, dimensions,
+                                GrAttachment::UsageFlags::kStencilAttachment, sampleCount, sFmt);
+    }
+    return sk_sp<GrGLRenderTarget>(
+            new GrGLRenderTarget(gpu, dimensions, format, sampleCount, idDesc, sb));
 }
 
 GrBackendRenderTarget GrGLRenderTarget::getBackendRenderTarget() const {
     GrGLFramebufferInfo fbi;
     fbi.fFBOID = fRTFBOID;
-    fbi.fFormat = this->getGLGpu()->glCaps().configSizedInternalFormat(this->config());
+    fbi.fFormat = GrGLFormatToEnum(this->format());
     int numStencilBits = 0;
-    if (GrStencilAttachment* stencil = this->renderTargetPriv().getStencilAttachment()) {
-        numStencilBits = stencil->bits();
+    if (GrAttachment* stencil = this->getStencilAttachment()) {
+        numStencilBits = GrBackendFormatStencilBits(stencil->backendFormat());
     }
 
-    return GrBackendRenderTarget(this->width(), this->height(), this->numColorSamples(),
-                                 numStencilBits, fbi);
+    return GrBackendRenderTarget(
+            this->width(), this->height(), this->numSamples(), numStencilBits, fbi);
 }
 
 GrBackendFormat GrGLRenderTarget::backendFormat() const {
     // We should never have a GrGLRenderTarget (even a textureable one with a target that is not
     // texture 2D.
-    return GrBackendFormat::MakeGL(fRTFormat, GR_GL_TEXTURE_2D);
+    return GrBackendFormat::MakeGL(GrGLFormatToEnum(fRTFormat), GR_GL_TEXTURE_2D);
 }
 
 size_t GrGLRenderTarget::onGpuMemorySize() const {
-    return GrSurface::ComputeSize(this->config(), this->width(), this->height(),
-                                  fNumSamplesOwnedPerPixel, GrMipMapped::kNo);
+    return GrSurface::ComputeSize(this->backendFormat(), this->dimensions(),
+                                  fNumSamplesOwnedPerPixel, GrMipmapped::kNo);
 }
 
 bool GrGLRenderTarget::completeStencilAttachment() {
     GrGLGpu* gpu = this->getGLGpu();
     const GrGLInterface* interface = gpu->glInterface();
-    GrStencilAttachment* stencil = this->renderTargetPriv().getStencilAttachment();
+    GrAttachment* stencil = this->getStencilAttachment();
     if (nullptr == stencil) {
         GR_GL_CALL(interface, FramebufferRenderbuffer(GR_GL_FRAMEBUFFER,
                                                       GR_GL_STENCIL_ATTACHMENT,
@@ -121,7 +135,7 @@ bool GrGLRenderTarget::completeStencilAttachment() {
                                                       GR_GL_DEPTH_ATTACHMENT,
                                                       GR_GL_RENDERBUFFER, 0));
 #ifdef SK_DEBUG
-        if (kChromium_GrGLDriver != gpu->glContext().driver()) {
+        if (!gpu->glCaps().skipErrorChecks()) {
             // This check can cause problems in Chromium if the context has been asynchronously
             // abandoned (see skbug.com/5200)
             GrGLenum status;
@@ -131,7 +145,7 @@ bool GrGLRenderTarget::completeStencilAttachment() {
 #endif
         return true;
     } else {
-        const GrGLStencilAttachment* glStencil = static_cast<const GrGLStencilAttachment*>(stencil);
+        const GrGLAttachment* glStencil = static_cast<const GrGLAttachment*>(stencil);
         GrGLuint rb = glStencil->renderbufferID();
 
         gpu->invalidateBoundRenderTarget();
@@ -139,7 +153,7 @@ bool GrGLRenderTarget::completeStencilAttachment() {
         GR_GL_CALL(interface, FramebufferRenderbuffer(GR_GL_FRAMEBUFFER,
                                                       GR_GL_STENCIL_ATTACHMENT,
                                                       GR_GL_RENDERBUFFER, rb));
-        if (glStencil->format().fPacked) {
+        if (GrGLFormatIsPackedDepthStencil(glStencil->format())) {
             GR_GL_CALL(interface, FramebufferRenderbuffer(GR_GL_FRAMEBUFFER,
                                                           GR_GL_DEPTH_ATTACHMENT,
                                                           GR_GL_RENDERBUFFER, rb));
@@ -151,7 +165,7 @@ bool GrGLRenderTarget::completeStencilAttachment() {
 
 
 #ifdef SK_DEBUG
-        if (kChromium_GrGLDriver != gpu->glContext().driver()) {
+        if (!gpu->glCaps().skipErrorChecks()) {
             // This check can cause problems in Chromium if the context has been asynchronously
             // abandoned (see skbug.com/5200)
             GrGLenum status;
@@ -222,8 +236,8 @@ void GrGLRenderTarget::dumpMemoryStatistics(SkTraceMemoryDump* traceMemoryDump) 
 
     // Log any renderbuffer's contribution to memory.
     if (fMSColorRenderbufferID) {
-        size_t size = GrSurface::ComputeSize(this->config(), this->width(), this->height(),
-                                             this->msaaSamples(), GrMipMapped::kNo);
+        size_t size = GrSurface::ComputeSize(this->backendFormat(), this->dimensions(),
+                                             this->msaaSamples(), GrMipmapped::kNo);
 
         // Due to this resource having both a texture and a renderbuffer component, dump as
         // skia/gpu_resources/resource_#/renderbuffer
@@ -243,7 +257,7 @@ int GrGLRenderTarget::msaaSamples() const {
     if (fTexFBOID == kUnresolvableFBOID || fTexFBOID != fRTFBOID) {
         // If the render target's FBO is external (fTexFBOID == kUnresolvableFBOID), or if we own
         // the render target's FBO (fTexFBOID == fRTFBOID) then we use the provided sample count.
-        return this->numStencilSamples();
+        return this->numSamples();
     }
 
     // When fTexFBOID == fRTFBOID, we either are not using MSAA, or MSAA is auto resolving, so use

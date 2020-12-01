@@ -5,14 +5,14 @@
  * found in the LICENSE file.
  */
 
-#include "Test.h"
+#include "tests/Test.h"
 
-#include "SkPictureRecorder.h"
-#include "SkRecord.h"
-#include "SkRecorder.h"
-#include "SkRecords.h"
-#include "SkShader.h"
-#include "SkSurface.h"
+#include "include/core/SkPictureRecorder.h"
+#include "include/core/SkShader.h"
+#include "include/core/SkSurface.h"
+#include "src/core/SkRecord.h"
+#include "src/core/SkRecorder.h"
+#include "src/core/SkRecords.h"
 
 #define COUNT(T) + 1
 static const int kRecordTypes = SK_RECORD_TYPES(COUNT);
@@ -58,7 +58,7 @@ DEF_TEST(Recorder_RefLeaking, r) {
 
     SkRect bounds = SkRect::MakeWH(320, 240);
     SkPaint paint;
-    paint.setShader(SkShader::MakeEmptyShader());
+    paint.setShader(SkShaders::Empty());
 
     REPORTER_ASSERT(r, paint.getShader()->unique());
     {
@@ -107,4 +107,14 @@ DEF_TEST(Recorder_drawImage_takeReference, reporter) {
         REPORTER_ASSERT(reporter, 1 == tally.count<SkRecords::DrawImageRect>());
     }
     REPORTER_ASSERT(reporter, image->unique());
+}
+
+// skbug.com/10997
+DEF_TEST(Recorder_boundsOverflow, reporter) {
+    SkRect bigBounds = {SK_ScalarMin, SK_ScalarMin, SK_ScalarMax, SK_ScalarMax};
+
+    SkRecord record;
+    SkRecorder recorder(&record, bigBounds);
+    REPORTER_ASSERT(reporter, recorder.imageInfo().width() > 0 &&
+                              recorder.imageInfo().height() > 0);
 }

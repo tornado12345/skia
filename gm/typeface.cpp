@@ -5,18 +5,27 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
-#include "sk_tool_utils.h"
-#include "Resources.h"
-#include "SkBlurTypes.h"
-#include "SkCanvas.h"
-#include "SkFontStyle.h"
-#include "SkMaskFilter.h"
-#include "SkString.h"
-#include "SkSurfaceProps.h"
-#include "SkTextBlob.h"
-#include "SkTypeface.h"
-#include "SkTypes.h"
+#include "gm/gm.h"
+#include "include/core/SkBlurTypes.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkFont.h"
+#include "include/core/SkFontStyle.h"
+#include "include/core/SkFontTypes.h"
+#include "include/core/SkMaskFilter.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkPoint.h"
+#include "include/core/SkRefCnt.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/core/SkTextBlob.h"
+#include "include/core/SkTypeface.h"
+#include "include/core/SkTypes.h"
+#include "include/private/SkTemplates.h"
+#include "tools/Resources.h"
+
+#include <string.h>
+#include <utility>
 
 static void getGlyphPositions(const SkFont& font, const uint16_t glyphs[],
                              int count, SkScalar x, SkScalar y, SkPoint pos[]) {
@@ -45,13 +54,13 @@ static void drawKernText(SkCanvas* canvas, const void* text, size_t len,
                          SkScalar x, SkScalar y, const SkFont& font, const SkPaint& paint) {
     SkTypeface* face = font.getTypefaceOrDefault();
     if (!face) {
-        canvas->drawSimpleText(text, len, kUTF8_SkTextEncoding, x, y, font, paint);
+        canvas->drawSimpleText(text, len, SkTextEncoding::kUTF8, x, y, font, paint);
         return;
     }
 
     SkAutoSTMalloc<128, uint16_t> glyphStorage(len);
     uint16_t* glyphs = glyphStorage.get();
-    int glyphCount = font.textToGlyphs(text, len, kUTF8_SkTextEncoding, glyphs, len);
+    int glyphCount = font.textToGlyphs(text, len, SkTextEncoding::kUTF8, glyphs, len);
     if (glyphCount < 1) {
         return;
     }
@@ -59,7 +68,7 @@ static void drawKernText(SkCanvas* canvas, const void* text, size_t len,
     SkAutoSTMalloc<128, int32_t> adjustmentStorage(glyphCount - 1);
     int32_t* adjustments = adjustmentStorage.get();
     if (!face->getKerningPairAdjustments(glyphs, glyphCount, adjustments)) {
-        canvas->drawSimpleText(text, len, kUTF8_SkTextEncoding, x, y, font, paint);
+        canvas->drawSimpleText(text, len, SkTextEncoding::kUTF8, x, y, font, paint);
         return;
     }
 
@@ -128,7 +137,7 @@ protected:
         SkPaint paint;
         for (int i = 0; i < gStylesCount; i++) {
             font.setTypeface(fFaces[i]);
-            canvas->drawSimpleText(text, textLen, kUTF8_SkTextEncoding, x, y, font, paint);
+            canvas->drawSimpleText(text, textLen, SkTextEncoding::kUTF8, x, y, font, paint);
             if (fApplyKerning) {
                 drawKernText(canvas, text, textLen, x + 240, y, font, paint);
             }
@@ -137,7 +146,7 @@ protected:
     }
 
 private:
-    typedef skiagm::GM INHERITED;
+    using INHERITED = skiagm::GM;
 };
 
 DEF_GM( return new TypefaceStylesGM(false); )
@@ -145,8 +154,7 @@ DEF_GM( return new TypefaceStylesGM(true); )
 
 ////////////////////////////////////////////////////////////////////////////////
 
-static void draw_typeface_rendering_gm(SkCanvas* canvas, sk_sp<SkTypeface> face,
-                                       char character = 'A') {
+static void draw_typeface_rendering_gm(SkCanvas* canvas, sk_sp<SkTypeface> face, SkGlyphID glyph) {
     struct AliasType {
         SkFont::Edging edging;
         bool inLayer;
@@ -182,10 +190,10 @@ static void draw_typeface_rendering_gm(SkCanvas* canvas, sk_sp<SkTypeface> face,
     constexpr SkScalar textSizes[] = { 9, 10, 11, 12, 13, 14, 15, 16 };
 
     constexpr SkFontHinting hintingTypes[] = {
-        kNo_SkFontHinting,
-        kSlight_SkFontHinting,
-        kNormal_SkFontHinting,
-        kFull_SkFontHinting
+        SkFontHinting::kNone,
+        SkFontHinting::kSlight,
+        SkFontHinting::kNormal,
+        SkFontHinting::kFull
     };
 
     struct SubpixelType {
@@ -236,14 +244,14 @@ static void draw_typeface_rendering_gm(SkCanvas* canvas, sk_sp<SkTypeface> face,
                                 canvas->rotate(2, x + subpixel.offset.x(),
                                                   y + subpixel.offset.y());
                             }
-                            canvas->drawSimpleText(&character, 1, kUTF8_SkTextEncoding,
+                            canvas->drawSimpleText(&glyph, sizeof(glyph), SkTextEncoding::kGlyphID,
                                                    x + subpixel.offset.x(),
                                                    y + subpixel.offset.y(), font, paint);
 
-                            SkScalar dx = SkScalarCeilToScalar(
-                                    font.measureText(&character, 1, kUTF8_SkTextEncoding)) + 5;
+                            SkScalar dx = SkScalarCeilToScalar(font.measureText(
+                                    &glyph, sizeof(glyph), SkTextEncoding::kGlyphID)) + 5;
                             x += dx;
-                            xMax = SkTMax(x, xMax);
+                            xMax = std::max(x, xMax);
                         }
                     }
                 }
@@ -286,10 +294,11 @@ static void draw_typeface_rendering_gm(SkCanvas* canvas, sk_sp<SkTypeface> face,
                 for (const StyleTests& style : styleTypes) {
                     paint.setStyle(style.style);
                     paint.setStrokeWidth(style.strokeWidth);
-                    canvas->drawSimpleText(&character, 1, kUTF8_SkTextEncoding, x, y, font, paint);
+                    canvas->drawSimpleText(&glyph, sizeof(glyph), SkTextEncoding::kGlyphID,
+                                           x, y, font, paint);
 
-                    SkScalar dx = SkScalarCeilToScalar(font.measureText(&character, 1,
-                                                                        kUTF8_SkTextEncoding)) + 5;
+                    SkScalar dx = SkScalarCeilToScalar(font.measureText(
+                            &glyph, sizeof(glyph), SkTextEncoding::kGlyphID)) + 5;
                     x += dx;
                 }
             }
@@ -336,10 +345,11 @@ static void draw_typeface_rendering_gm(SkCanvas* canvas, sk_sp<SkTypeface> face,
                 }
                 for (const MaskTests& mask : maskTypes) {
                     paint.setMaskFilter(SkMaskFilter::MakeBlur(mask.style, mask.sigma));
-                    canvas->drawSimpleText(&character, 1, kUTF8_SkTextEncoding, x, y, font, paint);
+                    canvas->drawSimpleText(&glyph, sizeof(glyph), SkTextEncoding::kGlyphID,
+                                           x, y, font, paint);
 
-                    SkScalar dx = SkScalarCeilToScalar(font.measureText(&character, 1,
-                                                                        kUTF8_SkTextEncoding)) + 5;
+                    SkScalar dx = SkScalarCeilToScalar(font.measureText(
+                            &glyph, sizeof(glyph), SkTextEncoding::kGlyphID)) + 5;
                     x += dx;
                 }
                 paint.setMaskFilter(nullptr);
@@ -351,7 +361,10 @@ static void draw_typeface_rendering_gm(SkCanvas* canvas, sk_sp<SkTypeface> face,
 
 DEF_SIMPLE_GM(typefacerendering, canvas, 640, 840) {
     if (sk_sp<SkTypeface> face = MakeResourceAsTypeface("fonts/hintgasp.ttf")) {
-        draw_typeface_rendering_gm(canvas, std::move(face));
+        draw_typeface_rendering_gm(canvas, face, face->unicharToGlyph('A'));
+
+        // Should draw nothing and not do anything undefined.
+        draw_typeface_rendering_gm(canvas, face, 0xFFFF);
     }
 }
 
@@ -360,14 +373,13 @@ DEF_SIMPLE_GM(typefacerendering, canvas, 640, 840) {
 
 DEF_SIMPLE_GM(typefacerendering_pfa, canvas, 640, 840) {
     if (sk_sp<SkTypeface> face = MakeResourceAsTypeface("fonts/Roboto2-Regular.pfa")) {
-        // This subsetted typeface doesn't have the character 'A'.
-        draw_typeface_rendering_gm(canvas, std::move(face), 'O');
+        draw_typeface_rendering_gm(canvas, face, face->unicharToGlyph('O'));
     }
 }
 
 DEF_SIMPLE_GM(typefacerendering_pfb, canvas, 640, 840) {
     if (sk_sp<SkTypeface> face = MakeResourceAsTypeface("fonts/Roboto2-Regular.pfb")) {
-        draw_typeface_rendering_gm(canvas, std::move(face), 'O');
+        draw_typeface_rendering_gm(canvas, face, face->unicharToGlyph('O'));
     }
 }
 

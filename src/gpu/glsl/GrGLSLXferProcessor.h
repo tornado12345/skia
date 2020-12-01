@@ -8,9 +8,9 @@
 #ifndef GrGLSLXferProcessor_DEFINED
 #define GrGLSLXferProcessor_DEFINED
 
-#include "SkPoint.h"
-#include "glsl/GrGLSLProgramDataManager.h"
-#include "glsl/GrGLSLUniformHandler.h"
+#include "include/core/SkPoint.h"
+#include "src/gpu/glsl/GrGLSLProgramDataManager.h"
+#include "src/gpu/glsl/GrGLSLUniformHandler.h"
 
 class GrXferProcessor;
 class GrGLSLXPBuilder;
@@ -34,8 +34,10 @@ public:
                  const char* inputCoverage,
                  const char* outputPrimary,
                  const char* outputSecondary,
+                 GrDstSampleType dstSampleType,
                  const SamplerHandle dstTextureSamplerHandle,
-                 GrSurfaceOrigin dstTextureOrigin)
+                 GrSurfaceOrigin dstTextureOrigin,
+                 const GrSwizzle& writeSwizzle)
                 : fXPFragBuilder(fragBuilder)
                 , fUniformHandler(uniformHandler)
                 , fShaderCaps(caps)
@@ -44,8 +46,10 @@ public:
                 , fInputCoverage(inputCoverage)
                 , fOutputPrimary(outputPrimary)
                 , fOutputSecondary(outputSecondary)
+                , fDstSampleType(dstSampleType)
                 , fDstTextureSamplerHandle(dstTextureSamplerHandle)
-                , fDstTextureOrigin(dstTextureOrigin) {}
+                , fDstTextureOrigin(dstTextureOrigin)
+                , fWriteSwizzle(writeSwizzle) {}
         GrGLSLXPFragmentBuilder* fXPFragBuilder;
         GrGLSLUniformHandler* fUniformHandler;
         const GrShaderCaps* fShaderCaps;
@@ -54,8 +58,10 @@ public:
         const char* fInputCoverage;
         const char* fOutputPrimary;
         const char* fOutputSecondary;
+        GrDstSampleType fDstSampleType;
         const SamplerHandle fDstTextureSamplerHandle;
         GrSurfaceOrigin fDstTextureOrigin;
+        GrSwizzle fWriteSwizzle;
     };
     /**
      * This is similar to emitCode() in the base class, except it takes a full shader builder.
@@ -106,6 +112,11 @@ private:
                                          const GrXferProcessor&) {
         SK_ABORT("emitBlendCodeForDstRead not implemented.");
     }
+
+    virtual void emitWriteSwizzle(GrGLSLXPFragmentBuilder*,
+                                  const GrSwizzle&,
+                                  const char* outColor,
+                                  const char* outColorSecondary) const;
 
     virtual void onSetData(const GrGLSLProgramDataManager&, const GrXferProcessor&) = 0;
 

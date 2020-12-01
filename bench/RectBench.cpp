@@ -5,17 +5,17 @@
  * found in the LICENSE file.
  */
 
-#include "Benchmark.h"
-#include "SkBitmap.h"
-#include "SkCanvas.h"
-#include "SkCommandLineFlags.h"
-#include "SkGradientShader.h"
-#include "SkPaint.h"
-#include "SkRandom.h"
-#include "SkShader.h"
-#include "SkString.h"
+#include "bench/Benchmark.h"
+#include "include/core/SkBitmap.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkShader.h"
+#include "include/core/SkString.h"
+#include "include/effects/SkGradientShader.h"
+#include "include/utils/SkRandom.h"
+#include "tools/flags/CommandLineFlags.h"
 
-DEFINE_double(strokeWidth, -1.0, "If set, use this stroke width in RectBench.");
+static DEFINE_double(strokeWidth, -1.0, "If set, use this stroke width in RectBench.");
 
 class RectBench : public Benchmark {
 public:
@@ -72,8 +72,8 @@ protected:
             h >>= fShift;
             x -= w/2;
             y -= h/2;
-            fRects[i].set(SkIntToScalar(x), SkIntToScalar(y),
-                          SkIntToScalar(x+w), SkIntToScalar(y+h));
+            fRects[i].setXYWH(SkIntToScalar(x), SkIntToScalar(y),
+                              SkIntToScalar(w), SkIntToScalar(h));
             fRects[i].offset(offset, offset);
             fColors[i] = rand.nextU() | 0xFF808080;
         }
@@ -108,7 +108,7 @@ protected:
 
 private:
     SkString fBaseName;
-    typedef Benchmark INHERITED;
+    using INHERITED = Benchmark;
 };
 
 class SrcModeRectBench : public RectBench {
@@ -135,7 +135,7 @@ private:
     SkBlendMode fMode;
     SkString fName;
 
-    typedef RectBench INHERITED;
+    using INHERITED = RectBench;
 };
 
 class TransparentRectBench : public RectBench {
@@ -157,7 +157,7 @@ protected:
 
 private:
     SkString fName;
-    typedef RectBench INHERITED;
+    using INHERITED = RectBench;
 };
 
 // Adds a shader to the paint that requires local coordinates to be used
@@ -171,7 +171,7 @@ protected:
         // Create the shader once, so that isn't included in the timing
         SkPoint pts[2] = { {0.f, 0.f}, {50.f, 50.f} };
         SkColor colors[] = { SK_ColorWHITE, SK_ColorBLUE };
-        fShader = SkGradientShader::MakeLinear(pts, colors, nullptr, 2, SkShader::kClamp_TileMode);
+        fShader = SkGradientShader::MakeLinear(pts, colors, nullptr, 2, SkTileMode::kClamp);
     }
 
     void setupPaint(SkPaint* paint) override {
@@ -189,7 +189,7 @@ private:
     SkString fName;
     sk_sp<SkShader> fShader;
 
-    typedef RectBench INHERITED;
+    using INHERITED = RectBench;
 };
 
 
@@ -295,8 +295,7 @@ protected:
             srcBM.allocN32Pixels(10, 1);
             srcBM.eraseColor(0xFF00FF00);
 
-            paint.setShader(SkShader::MakeBitmapShader(srcBM, SkShader::kClamp_TileMode,
-                                                       SkShader::kClamp_TileMode));
+            paint.setShader(srcBM.makeShader());
         }
         for (int loop = 0; loop < loops; loop++) {
             for (size_t i = 0; i < sizes; i++) {
@@ -327,7 +326,7 @@ protected:
     const char* onGetName() override { return fName.c_str(); }
 
 private:
-    typedef RectBench INHERITED;
+    using INHERITED = RectBench;
     kMaskType _type;
     SkString fName;
 };

@@ -5,9 +5,13 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
-#include "SkCanvas.h"
-#include "SkPath.h"
+#include "gm/gm.h"
+#include "include/core/SkBitmap.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkPath.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkScalar.h"
 
 static void make_bm(SkBitmap* bm) {
     bm->allocN32Pixels(60, 60);
@@ -15,12 +19,7 @@ static void make_bm(SkBitmap* bm) {
 
     SkCanvas canvas(*bm);
     SkPaint paint;
-
-    SkPath path;
-    path.moveTo(6, 6);
-    path.lineTo(6, 54);
-    path.lineTo(30, 54);
-    canvas.drawPath(path, paint);
+    canvas.drawPath(SkPath::Polygon({{6,6}, {6,54}, {30,54}}, false), paint);
 
     paint.setStyle(SkPaint::kStroke_Style);
     canvas.drawRect(SkRect::MakeLTRB(0.5f, 0.5f, 59.5f, 59.5f), paint);

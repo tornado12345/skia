@@ -5,15 +5,15 @@
  * found in the LICENSE file.
  */
 
-#include "Sample.h"
-#include "SkCanvas.h"
-#include "SkFontMetrics.h"
-#include "SkGraphics.h"
-#include "SkPath.h"
-#include "SkRandom.h"
-#include "SkString.h"
-#include "SkTextUtils.h"
-#include "SkTime.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkFontMetrics.h"
+#include "include/core/SkGraphics.h"
+#include "include/core/SkPath.h"
+#include "include/core/SkString.h"
+#include "include/core/SkTime.h"
+#include "include/utils/SkRandom.h"
+#include "include/utils/SkTextUtils.h"
+#include "samplecode/Sample.h"
 
 class PolyToPolyView : public Sample {
 public:
@@ -69,13 +69,7 @@ public:
     }
 
 protected:
-    virtual bool onQuery(Sample::Event* evt)  {
-        if (Sample::TitleQ(*evt)) {
-            Sample::TitleR(evt, "PolyToPolyView");
-            return true;
-        }
-        return this->INHERITED::onQuery(evt);
-    }
+    SkString name() override { return SkString("PolyToPolyView"); }
 
     static void doDraw(SkCanvas* canvas, SkPaint* paint, const SkFont& font, const int isrc[],
                        const int idst[], int count) {
@@ -111,7 +105,7 @@ protected:
         canvas->restore();
     }
 
-    virtual void onDrawContent(SkCanvas* canvas) {
+    void onDrawContent(SkCanvas* canvas) override {
         SkPaint paint;
         paint.setAntiAlias(true);
         paint.setStrokeWidth(SkIntToScalar(4));
@@ -153,7 +147,7 @@ protected:
     }
 
 private:
-    typedef Sample INHERITED;
+    using INHERITED = Sample;
 };
 
 //////////////////////////////////////////////////////////////////////////////

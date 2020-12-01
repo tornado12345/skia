@@ -5,18 +5,18 @@
  * found in the LICENSE file.
  */
 
-#include "Sample.h"
-#include "SkCanvas.h"
-#include "SkColorFilter.h"
-#include "SkGradientShader.h"
-#include "SkImage.h"
-#include "SkPath.h"
-#include "SkRegion.h"
-#include "SkShader.h"
-#include "SkUtils.h"
-#include "Resources.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColorFilter.h"
+#include "include/core/SkImage.h"
+#include "include/core/SkPath.h"
+#include "include/core/SkRegion.h"
+#include "include/core/SkShader.h"
+#include "include/effects/SkGradientShader.h"
+#include "samplecode/Sample.h"
+#include "src/core/SkUtils.h"
+#include "tools/Resources.h"
 
-const SkScalar gMat[] = {
+const float gMat[] = {
     .3f, .6f, .1f, 0, 0,
     .3f, .6f, .1f, 0, 0,
     .3f, .6f, .1f, 0, 0,
@@ -35,20 +35,14 @@ public:
     MixerView() {}
 
 protected:
-    bool onQuery(Event* evt) override {
-        if (Sample::TitleQ(*evt)) {
-            Sample::TitleR(evt, "Mixer");
-            return true;
-        }
-        return this->INHERITED::onQuery(evt);
-    }
+    SkString name() override { return SkString("Mixer"); }
 
     void dodraw(SkCanvas* canvas, sk_sp<SkColorFilter> cf0, sk_sp<SkColorFilter> cf1, float gap) {
         SkPaint paint;
         paint.setColorFilter(cf0);
         canvas->drawImage(fImg, 0, 0, &paint);
 
-        paint.setColorFilter(SkColorFilter::MakeMixer(cf0, cf1, fWeight));
+        paint.setColorFilter(SkColorFilters::Lerp(fWeight, cf0, cf1));
         canvas->drawImage(fImg, fImg->width() + gap * fWeight, 0, &paint);
 
         paint.setColorFilter(cf1);
@@ -58,8 +52,8 @@ protected:
     void onDrawContent(SkCanvas* canvas) override {
         if (!fImg) {
             fImg = GetResourceAsImage("images/mandrill_256.png");
-            fCF0 = SkColorFilter::MakeMatrixFilterRowMajor255(gMat);
-            fCF1 = SkColorFilter::MakeModeFilter(0xFF44CC88, SkBlendMode::kScreen);
+            fCF0 = SkColorFilters::Matrix(gMat);
+            fCF1 = SkColorFilters::Blend(0xFF44CC88, SkBlendMode::kScreen);
         }
 
         float gap = fImg->width() * 3;
@@ -77,23 +71,20 @@ protected:
         }
     }
 
-    virtual Click* onFindClickHandler(SkScalar x, SkScalar y, unsigned) override {
+    Click* onFindClickHandler(SkScalar x, SkScalar y, skui::ModifierKey) override {
         return fRect.contains(SkScalarRoundToInt(x),
-                              SkScalarRoundToInt(y)) ? new Click(this) : nullptr;
+                              SkScalarRoundToInt(y)) ? new Click() : nullptr;
     }
 
     bool onClick(Click* click) override {
-        fRect.offset(click->fICurr.fX - click->fIPrev.fX,
-                     click->fICurr.fY - click->fIPrev.fY);
+        fRect.offset(click->fCurr.fX - click->fPrev.fX,
+                     click->fCurr.fY - click->fPrev.fY);
         return true;
     }
 
 private:
     SkIRect fRect;
 
-    typedef Sample INHERITED;
+    using INHERITED = Sample;
 };
-
-//////////////////////////////////////////////////////////////////////////////
-
 DEF_SAMPLE( return new MixerView; )

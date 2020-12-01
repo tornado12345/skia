@@ -5,50 +5,54 @@
  * found in the LICENSE file.
  */
 
-#include "SkSLType.h"
-#include "SkSLContext.h"
+#include "src/sksl/SkSLContext.h"
+#include "src/sksl/ir/SkSLType.h"
 
 namespace SkSL {
 
-int Type::coercionCost(const Type& other) const {
+CoercionCost Type::coercionCost(const Type& other) const {
     if (*this == other) {
-        return 0;
+        return CoercionCost::Free();
     }
-    if (this->kind() == kNullable_Kind && other.kind() != kNullable_Kind) {
-        int result = this->componentType().coercionCost(other);
-        if (result != INT_MAX) {
-            ++result;
+    if (this->typeKind() == TypeKind::kNullable && other.typeKind() != TypeKind::kNullable) {
+        CoercionCost result = this->componentType().coercionCost(other);
+        if (result.isPossible(/*allowNarrowing=*/true)) {
+            ++result.fNormalCost;
         }
         return result;
     }
-    if (this->fName == "null" && other.kind() == kNullable_Kind) {
-        return 0;
+    if (this->name() == "null" && other.typeKind() == TypeKind::kNullable) {
+        return CoercionCost::Free();
     }
-    if (this->kind() == kVector_Kind && other.kind() == kVector_Kind) {
+    if (this->typeKind() == TypeKind::kVector && other.typeKind() == TypeKind::kVector) {
         if (this->columns() == other.columns()) {
             return this->componentType().coercionCost(other.componentType());
         }
-        return INT_MAX;
+        return CoercionCost::Impossible();
     }
-    if (this->kind() == kMatrix_Kind) {
+    if (this->typeKind() == TypeKind::kMatrix) {
         if (this->columns() == other.columns() && this->rows() == other.rows()) {
             return this->componentType().coercionCost(other.componentType());
         }
-        return INT_MAX;
+        return CoercionCost::Impossible();
     }
-    if (this->isNumber() && other.isNumber() && other.priority() > this->priority()) {
-        return other.priority() - this->priority();
+    if (this->isNumber() && other.isNumber()) {
+        if (other.priority() >= this->priority()) {
+            return CoercionCost::Normal(other.priority() - this->priority());
+        } else {
+            return CoercionCost::Narrowing(this->priority() - other.priority());
+        }
     }
     for (size_t i = 0; i < fCoercibleTypes.size(); i++) {
         if (*fCoercibleTypes[i] == other) {
-            return (int) i + 1;
+            return CoercionCost::Normal((int) i + 1);
         }
     }
-    return INT_MAX;
+    return CoercionCost::Impossible();
 }
 
 const Type& Type::toCompound(const Context& context, int columns, int rows) const {
-    SkASSERT(this->kind() == Type::kScalar_Kind);
+    SkASSERT(this->isScalar());
     if (columns == 1 && rows == 1) {
         return *this;
     }
@@ -56,6 +60,7 @@ const Type& Type::toCompound(const Context& context, int columns, int rows) cons
         switch (rows) {
             case 1:
                 switch (columns) {
+                    case 1: return *context.fFloat_Type;
                     case 2: return *context.fFloat2_Type;
                     case 3: return *context.fFloat3_Type;
                     case 4: return *context.fFloat4_Type;
@@ -88,6 +93,7 @@ const Type& Type::toCompound(const Context& context, int columns, int rows) cons
         switch (rows) {
             case 1:
                 switch (columns) {
+                    case 1: return *context.fHalf_Type;
                     case 2: return *context.fHalf2_Type;
                     case 3: return *context.fHalf3_Type;
                     case 4: return *context.fHalf4_Type;
@@ -116,42 +122,11 @@ const Type& Type::toCompound(const Context& context, int columns, int rows) cons
                 }
             default: ABORT("unsupported row count (%d)", rows);
         }
-    } else if (*this == *context.fDouble_Type) {
-        switch (rows) {
-            case 1:
-                switch (columns) {
-                    case 2: return *context.fDouble2_Type;
-                    case 3: return *context.fDouble3_Type;
-                    case 4: return *context.fDouble4_Type;
-                    default: ABORT("unsupported vector column count (%d)", columns);
-                }
-            case 2:
-                switch (columns) {
-                    case 2: return *context.fDouble2x2_Type;
-                    case 3: return *context.fDouble3x2_Type;
-                    case 4: return *context.fDouble4x2_Type;
-                    default: ABORT("unsupported matrix column count (%d)", columns);
-                }
-            case 3:
-                switch (columns) {
-                    case 2: return *context.fDouble2x3_Type;
-                    case 3: return *context.fDouble3x3_Type;
-                    case 4: return *context.fDouble4x3_Type;
-                    default: ABORT("unsupported matrix column count (%d)", columns);
-                }
-            case 4:
-                switch (columns) {
-                    case 2: return *context.fDouble2x4_Type;
-                    case 3: return *context.fDouble3x4_Type;
-                    case 4: return *context.fDouble4x4_Type;
-                    default: ABORT("unsupported matrix column count (%d)", columns);
-                }
-            default: ABORT("unsupported row count (%d)", rows);
-        }
     } else if (*this == *context.fInt_Type || *this == *context.fIntLiteral_Type) {
         switch (rows) {
             case 1:
                 switch (columns) {
+                    case 1: return *context.fInt_Type;
                     case 2: return *context.fInt2_Type;
                     case 3: return *context.fInt3_Type;
                     case 4: return *context.fInt4_Type;
@@ -163,6 +138,7 @@ const Type& Type::toCompound(const Context& context, int columns, int rows) cons
         switch (rows) {
             case 1:
                 switch (columns) {
+                    case 1: return *context.fShort_Type;
                     case 2: return *context.fShort2_Type;
                     case 3: return *context.fShort3_Type;
                     case 4: return *context.fShort4_Type;
@@ -174,6 +150,7 @@ const Type& Type::toCompound(const Context& context, int columns, int rows) cons
         switch (rows) {
             case 1:
                 switch (columns) {
+                    case 1: return *context.fByte_Type;
                     case 2: return *context.fByte2_Type;
                     case 3: return *context.fByte3_Type;
                     case 4: return *context.fByte4_Type;
@@ -185,6 +162,7 @@ const Type& Type::toCompound(const Context& context, int columns, int rows) cons
         switch (rows) {
             case 1:
                 switch (columns) {
+                    case 1: return *context.fUInt_Type;
                     case 2: return *context.fUInt2_Type;
                     case 3: return *context.fUInt3_Type;
                     case 4: return *context.fUInt4_Type;
@@ -196,6 +174,7 @@ const Type& Type::toCompound(const Context& context, int columns, int rows) cons
         switch (rows) {
             case 1:
                 switch (columns) {
+                    case 1: return *context.fUShort_Type;
                     case 2: return *context.fUShort2_Type;
                     case 3: return *context.fUShort3_Type;
                     case 4: return *context.fUShort4_Type;
@@ -207,6 +186,7 @@ const Type& Type::toCompound(const Context& context, int columns, int rows) cons
         switch (rows) {
             case 1:
                 switch (columns) {
+                    case 1: return *context.fUByte_Type;
                     case 2: return *context.fUByte2_Type;
                     case 3: return *context.fUByte3_Type;
                     case 4: return *context.fUByte4_Type;
@@ -218,6 +198,7 @@ const Type& Type::toCompound(const Context& context, int columns, int rows) cons
         switch (rows) {
             case 1:
                 switch (columns) {
+                    case 1: return *context.fBool_Type;
                     case 2: return *context.fBool2_Type;
                     case 3: return *context.fBool3_Type;
                     case 4: return *context.fBool4_Type;
@@ -226,7 +207,10 @@ const Type& Type::toCompound(const Context& context, int columns, int rows) cons
             default: ABORT("unsupported row count (%d)", rows);
         }
     }
-    ABORT("unsupported scalar_to_compound type %s", this->description().c_str());
+#ifdef SK_DEBUG
+    ABORT("unsupported toCompound type %s", this->description().c_str());
+#endif
+    return *context.fVoid_Type;
 }
 
-} // namespace
+}  // namespace SkSL

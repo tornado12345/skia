@@ -8,8 +8,8 @@
 #ifndef GrGLPath_DEFINED
 #define GrGLPath_DEFINED
 
-#include "../GrPath.h"
-#include "gl/GrGLTypes.h"
+#include "include/gpu/gl/GrGLTypes.h"
+#include "src/gpu/GrPath.h"
 
 class GrGLGpu;
 class GrStyle;
@@ -50,7 +50,7 @@ private:
     bool fShouldStroke;
     bool fShouldFill;
 
-    typedef GrPath INHERITED;
+    using INHERITED = GrPath;
 };
 
 #endif

@@ -8,15 +8,38 @@
 #ifndef MtlTestContext_h
 #define MtlTestContext_h
 
-#include "TestContext.h"
+#include "tools/gpu/TestContext.h"
 
 #ifdef SK_METAL
 
+#include "include/gpu/mtl/GrMtlBackendContext.h"
+
 namespace sk_gpu_test {
-TestContext* CreatePlatformMtlTestContext(TestContext*);
+class MtlTestContext : public TestContext {
+public:
+    GrBackendApi backend() override { return GrBackendApi::kMetal; }
+
+    const GrMtlBackendContext& getMtlBackendContext() const {
+        return fMtl;
+    }
+
+protected:
+    MtlTestContext(const GrMtlBackendContext& mtl)
+            : fMtl(mtl) {}
+
+    GrMtlBackendContext fMtl;
+
+private:
+    using INHERITED = TestContext;
+};
+
+/**
+ * Creates Metal context object bound to the native Metal library.
+ */
+MtlTestContext* CreatePlatformMtlTestContext(MtlTestContext*);
+
 }  // namespace sk_gpu_test
 
 #endif
-
 
 #endif /* MtlTestContext_h */

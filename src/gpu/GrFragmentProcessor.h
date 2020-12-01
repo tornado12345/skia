@@ -8,26 +8,25 @@
 #ifndef GrFragmentProcessor_DEFINED
 #define GrFragmentProcessor_DEFINED
 
-#include "GrProcessor.h"
-#include "GrProxyRef.h"
+#include <tuple>
 
-class GrCoordTransform;
+#include "include/private/SkSLSampleUsage.h"
+#include "src/gpu/GrProcessor.h"
+#include "src/gpu/ops/GrOp.h"
+
 class GrGLSLFragmentProcessor;
 class GrPaint;
 class GrPipeline;
 class GrProcessorKeyBuilder;
 class GrShaderCaps;
 class GrSwizzle;
+class GrTextureEffect;
 
 /** Provides custom fragment shader code. Fragment processors receive an input color (half4) and
-    produce an output color. They may reference textures and uniforms. They may use
-    GrCoordTransforms to receive a transformation of the local coordinates that map from local space
-    to the fragment being processed.
+    produce an output color. They may reference textures and uniforms.
  */
 class GrFragmentProcessor : public GrProcessor {
 public:
-    class TextureSampler;
-
     /**
     *  In many instances (e.g. SkShader::asFragmentProcessor() implementations) it is desirable to
     *  only consider the input color's alpha. However, there is a competing desire to have reusable
@@ -49,6 +48,20 @@ public:
             std::unique_ptr<GrFragmentProcessor> child);
 
     /**
+     *  Returns a fragment processor that generates the passed-in color, modulated by the child's
+     *  alpha channel. (Pass a null FP to use the alpha from fInputColor instead of a child FP.)
+     */
+    static std::unique_ptr<GrFragmentProcessor> ModulateAlpha(
+            std::unique_ptr<GrFragmentProcessor> child, const SkPMColor4f& color);
+
+    /**
+     *  Returns a fragment processor that generates the passed-in color, modulated by the child's
+     *  RGBA color. (Pass a null FP to use the color from fInputColor instead of a child FP.)
+     */
+    static std::unique_ptr<GrFragmentProcessor> ModulateRGBA(
+            std::unique_ptr<GrFragmentProcessor> child, const SkPMColor4f& color);
+
+    /**
      *  This assumes that the input color to the returned processor will be unpremul and that the
      *  passed processor (which becomes the returned processor's child) produces a premul output.
      *  The result of the returned processor is a premul of its input color modulated by the child
@@ -63,7 +76,8 @@ public:
      *  child.
      */
     static std::unique_ptr<GrFragmentProcessor> OverrideInput(std::unique_ptr<GrFragmentProcessor>,
-                                                              const SkPMColor4f&);
+                                                              const SkPMColor4f&,
+                                                              bool useUniform = true);
 
     /**
      *  Returns a fragment processor that premuls the input before calling the passed in fragment
@@ -79,15 +93,19 @@ public:
                                                               const GrSwizzle&);
 
     /**
-     * Returns a fragment processor that runs the passed in array of fragment processors in a
-     * series. The original input is passed to the first, the first's output is passed to the
-     * second, etc. The output of the returned processor is the output of the last processor of the
-     * series.
-     *
-     * The array elements with be moved.
+     *  Returns a fragment processor that calls the passed in fragment processor, and then ensures
+     *  the output is a valid premul color by clamping RGB to [0, A].
      */
-    static std::unique_ptr<GrFragmentProcessor> RunInSeries(std::unique_ptr<GrFragmentProcessor>*,
-                                                            int cnt);
+    static std::unique_ptr<GrFragmentProcessor> ClampPremulOutput(
+            std::unique_ptr<GrFragmentProcessor>);
+
+    /**
+     * Returns a fragment processor that composes two fragment processors `f` and `g` into f(g(x)).
+     * This is equivalent to running them in series. This is not the same as transfer-mode
+     * composition; there is no blending step.
+     */
+    static std::unique_ptr<GrFragmentProcessor> Compose(std::unique_ptr<GrFragmentProcessor> f,
+                                                        std::unique_ptr<GrFragmentProcessor> g);
 
     /**
      * Makes a copy of this fragment processor that draws equivalently to the original.
@@ -95,38 +113,92 @@ public:
      */
     virtual std::unique_ptr<GrFragmentProcessor> clone() const = 0;
 
+    // The FP this was registered with as a child function. This will be null if this is a root.
+    const GrFragmentProcessor* parent() const { return fParent; }
+
     GrGLSLFragmentProcessor* createGLSLInstance() const;
 
     void getGLSLProcessorKey(const GrShaderCaps& caps, GrProcessorKeyBuilder* b) const {
         this->onGetGLSLProcessorKey(caps, b);
-        for (int i = 0; i < fChildProcessors.count(); ++i) {
-            fChildProcessors[i]->getGLSLProcessorKey(caps, b);
+        for (const auto& child : fChildProcessors) {
+            if (child) {
+                child->getGLSLProcessorKey(caps, b);
+            }
         }
     }
 
-    int numTextureSamplers() const { return fTextureSamplerCnt; }
-    const TextureSampler& textureSampler(int i) const;
-
-    int numCoordTransforms() const { return fCoordTransforms.count(); }
-
-    /** Returns the coordinate transformation at index. index must be valid according to
-        numTransforms(). */
-    const GrCoordTransform& coordTransform(int index) const { return *fCoordTransforms[index]; }
-
-    const SkTArray<const GrCoordTransform*, true>& coordTransforms() const {
-        return fCoordTransforms;
-    }
+    int numVaryingCoordsUsed() const { return this->usesVaryingCoordsDirectly() ? 1 : 0; }
 
     int numChildProcessors() const { return fChildProcessors.count(); }
+    int numNonNullChildProcessors() const;
 
-    const GrFragmentProcessor& childProcessor(int index) const { return *fChildProcessors[index]; }
+    GrFragmentProcessor* childProcessor(int index) { return fChildProcessors[index].get(); }
+    const GrFragmentProcessor* childProcessor(int index) const {
+        return fChildProcessors[index].get();
+    }
 
-    bool instantiate(GrResourceProvider*) const;
+    SkDEBUGCODE(bool isInstantiated() const;)
 
-    void markPendingExecution() const;
+    /**
+     * Does this FP require local coordinates to be produced by the primitive processor? This only
+     * returns true if this FP will directly read those local coordinates. FPs that are sampled
+     * explicitly do not require primitive-generated local coordinates (because the sample
+     * coordinates are supplied by the parent FP).
+     *
+     * If the root of an FP tree does not provide explicit coordinates, the geometry processor
+     * provides the original local coordinates to start. This may be implicit as part of vertex
+     * shader-lifted varyings, or by providing the base local coordinate to the fragment shader.
+     */
+    bool usesVaryingCoordsDirectly() const {
+        return SkToBool(fFlags & kUsesSampleCoordsDirectly_Flag) &&
+               !SkToBool(fFlags & kSampledWithExplicitCoords_Flag);
+    }
 
-    /** Do any of the coordtransforms for this processor require local coords? */
-    bool usesLocalCoords() const { return SkToBool(fFlags & kUsesLocalCoords_Flag); }
+    /**
+     * Do any of the FPs in this tree require local coordinates to be produced by the primitive
+     * processor? This can return true even if this FP does not refer to sample coordinates, but
+     * true if a descendant FP uses them.
+     */
+    bool usesVaryingCoords() const {
+        return (SkToBool(fFlags & kUsesSampleCoordsDirectly_Flag) ||
+                SkToBool(fFlags & kUsesSampleCoordsIndirectly_Flag)) &&
+               !SkToBool(fFlags & kSampledWithExplicitCoords_Flag);
+    }
+
+   /**
+     * True if this FP refers directly to the sample coordinate parameter of its function
+     * (e.g. uses EmitArgs::fSampleCoord in emitCode()). This also returns true if the
+     * coordinate reference comes from autogenerated code invoking 'sample(matrix)' expressions.
+     *
+     * Unlike usesVaryingCoords(), this can return true whether or not the FP is explicitly
+     * sampled, and does not change based on how the FP is composed. This property is specific to
+     * the FP's function and not the entire program.
+     */
+    bool referencesSampleCoords() const {
+        return SkToBool(fFlags & kUsesSampleCoordsDirectly_Flag);
+    }
+
+    // True if this FP's parent invokes it with 'sample(float2)' or a variable 'sample(matrix)'
+    bool isSampledWithExplicitCoords() const {
+        return SkToBool(fFlags & kSampledWithExplicitCoords_Flag);
+    }
+
+    // True if the transform chain from root to this FP introduces perspective into the local
+    // coordinate expression.
+    bool hasPerspectiveTransform() const {
+        return SkToBool(fFlags & kNetTransformHasPerspective_Flag);
+    }
+
+    // True if emitted code returns the output color, rather than assigning it to sk_OutColor.
+    virtual bool usesExplicitReturn() const {
+        return false;
+    }
+
+    // The SampleUsage describing how this FP is invoked by its parent using 'sample(matrix)'
+    // This only reflects the immediate sampling from parent to this FP
+    const SkSL::SampleUsage& sampleUsage() const {
+        return fUsage;
+    }
 
     /**
      * A GrDrawOp may premultiply its antialiasing coverage into its GrGeometryProcessor's color
@@ -176,72 +248,50 @@ public:
      */
     bool isEqual(const GrFragmentProcessor& that) const;
 
-    /**
-     * Pre-order traversal of a FP hierarchy, or of the forest of FPs in a GrPipeline. In the latter
-     * case the tree rooted at each FP in the GrPipeline is visited successively.
-     */
-    class Iter : public SkNoncopyable {
-    public:
-        explicit Iter(const GrFragmentProcessor* fp) { fFPStack.push_back(fp); }
-        explicit Iter(const GrPipeline& pipeline);
-        explicit Iter(const GrPaint&);
-        const GrFragmentProcessor* next();
+    void visitProxies(const GrOp::VisitProxyFunc& func) const;
 
-    private:
-        SkSTArray<4, const GrFragmentProcessor*, true> fFPStack;
-    };
+    void visitTextureEffects(const std::function<void(const GrTextureEffect&)>&) const;
 
-    /**
-     * Iterates over all the Ts owned by a GrFragmentProcessor and its children or over all the Ts
-     * owned by the forest of GrFragmentProcessors in a GrPipeline. FPs are visited in the same
-     * order as Iter and each of an FP's Ts are visited in order.
-     */
-    template <typename T, int (GrFragmentProcessor::*COUNT)() const,
-              const T& (GrFragmentProcessor::*GET)(int)const>
-    class FPItemIter : public SkNoncopyable {
-    public:
-        explicit FPItemIter(const GrFragmentProcessor* fp)
-                : fCurrFP(nullptr)
-                , fCTIdx(0)
-                , fFPIter(fp) {
-            fCurrFP = fFPIter.next();
-        }
-        explicit FPItemIter(const GrPipeline& pipeline)
-                : fCurrFP(nullptr)
-                , fCTIdx(0)
-                , fFPIter(pipeline) {
-            fCurrFP = fFPIter.next();
-        }
+    GrTextureEffect* asTextureEffect();
+    const GrTextureEffect* asTextureEffect() const;
 
-        const T* next() {
-            if (!fCurrFP) {
-                return nullptr;
-            }
-            while (fCTIdx == (fCurrFP->*COUNT)()) {
-                fCTIdx = 0;
-                fCurrFP = fFPIter.next();
-                if (!fCurrFP) {
-                    return nullptr;
-                }
-            }
-            return &(fCurrFP->*GET)(fCTIdx++);
-        }
+#if GR_TEST_UTILS
+    // Generates debug info for this processor tree by recursively calling dumpInfo() on this
+    // processor and its children.
+    SkString dumpTreeInfo() const;
+#endif
 
-    private:
-        const GrFragmentProcessor*  fCurrFP;
-        int                         fCTIdx;
-        GrFragmentProcessor::Iter   fFPIter;
-    };
+    // A pre-order traversal iterator over a hierarchy of FPs. It can also iterate over all the FP
+    // hierarchies rooted in a GrPaint, GrProcessorSet, or GrPipeline. For these collections it
+    // iterates the tree rooted at each color FP and then each coverage FP.
+    //
+    // An iterator is constructed from one of the srcs and used like this:
+    //   for (GrFragmentProcessor::Iter iter(pipeline); iter; ++iter) {
+    //       GrFragmentProcessor& fp = *iter;
+    //   }
+    // The exit test for the loop is using CIter's operator bool().
+    // To use a range-for loop instead see CIterRange below.
+    class CIter;
 
-    using CoordTransformIter = FPItemIter<GrCoordTransform,
-                                          &GrFragmentProcessor::numCoordTransforms,
-                                          &GrFragmentProcessor::coordTransform>;
+    // Used to implement a range-for loop using CIter. Src is one of GrFragmentProcessor,
+    // GrPaint, GrProcessorSet, or GrPipeline. Type aliases for these defined below.
+    // Example usage:
+    //   for (const auto& fp : GrFragmentProcessor::PaintRange(paint)) {
+    //       if (fp.usesLocalCoords()) {
+    //       ...
+    //       }
+    //   }
+    template <typename Src> class CIterRange;
 
-    using TextureAccessIter = FPItemIter<TextureSampler,
-                                         &GrFragmentProcessor::numTextureSamplers,
-                                         &GrFragmentProcessor::textureSampler>;
+    // We would use template deduction guides for CIter but for:
+    // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=79501
+    // Instead we use these specialized type aliases to make it prettier
+    // to construct CIters for particular sources of FPs.
+    using FPRange = CIterRange<GrFragmentProcessor>;
+    using PaintRange = CIterRange<GrPaint>;
 
-    void visitProxies(const std::function<void(GrSurfaceProxy*)>& func);
+    // Sentinel type for range-for using CIter.
+    class EndCIter {};
 
 protected:
     enum OptimizationFlags : uint32_t {
@@ -258,24 +308,24 @@ protected:
     /**
      * Can be used as a helper to decide which fragment processor OptimizationFlags should be set.
      * This assumes that the subclass output color will be a modulation of the input color with a
-     * value read from a texture of the passed config and that the texture contains premultiplied
-     * color or alpha values that are in range.
+     * value read from a texture of the passed color type and that the texture contains
+     * premultiplied color or alpha values that are in range.
      *
      * Since there are multiple ways in which a sampler may have its coordinates clamped or wrapped,
      * callers must determine on their own if the sampling uses a decal strategy in any way, in
-     * which case the texture may become transparent regardless of the pixel config.
+     * which case the texture may become transparent regardless of the color type.
      */
-    static OptimizationFlags ModulateForSamplerOptFlags(GrPixelConfig config, bool samplingDecal) {
+    static OptimizationFlags ModulateForSamplerOptFlags(SkAlphaType alphaType, bool samplingDecal) {
         if (samplingDecal) {
             return kCompatibleWithCoverageAsAlpha_OptimizationFlag;
         } else {
-            return ModulateForClampedSamplerOptFlags(config);
+            return ModulateForClampedSamplerOptFlags(alphaType);
         }
     }
 
     // As above, but callers should somehow ensure or assert their sampler still uses clamping
-    static OptimizationFlags ModulateForClampedSamplerOptFlags(GrPixelConfig config) {
-        if (GrPixelConfigIsOpaque(config)) {
+    static OptimizationFlags ModulateForClampedSamplerOptFlags(SkAlphaType alphaType) {
+        if (alphaType == kOpaque_SkAlphaType) {
             return kCompatibleWithCoverageAsAlpha_OptimizationFlag |
                    kPreservesOpaqueInput_OptimizationFlag;
         } else {
@@ -284,13 +334,17 @@ protected:
     }
 
     GrFragmentProcessor(ClassID classID, OptimizationFlags optimizationFlags)
-    : INHERITED(classID)
-    , fFlags(optimizationFlags) {
-        SkASSERT((fFlags & ~kAll_OptimizationFlags) == 0);
+            : INHERITED(classID), fFlags(optimizationFlags) {
+        SkASSERT((optimizationFlags & ~kAll_OptimizationFlags) == 0);
     }
 
     OptimizationFlags optimizationFlags() const {
         return static_cast<OptimizationFlags>(kAll_OptimizationFlags & fFlags);
+    }
+
+    /** Useful when you can't call fp->optimizationFlags() on a base class object from a subclass.*/
+    static OptimizationFlags ProcessorOptimizationFlags(const GrFragmentProcessor* fp) {
+        return fp ? fp->optimizationFlags() : kAll_OptimizationFlags;
     }
 
     /**
@@ -298,62 +352,45 @@ protected:
      * constantOutputForConstantInput. It must only be called when
      * hasConstantOutputForConstantInput() is known to be true.
      */
-    static SkPMColor4f ConstantOutputForConstantInput(const GrFragmentProcessor& fp,
+    static SkPMColor4f ConstantOutputForConstantInput(const GrFragmentProcessor* fp,
                                                       const SkPMColor4f& input) {
-        SkASSERT(fp.hasConstantOutputForConstantInput());
-        return fp.constantOutputForConstantInput(input);
+        if (fp) {
+            SkASSERT(fp->hasConstantOutputForConstantInput());
+            return fp->constantOutputForConstantInput(input);
+        } else {
+            return input;
+        }
     }
-
-    /**
-     * Fragment Processor subclasses call this from their constructor to register coordinate
-     * transformations. Coord transforms provide a mechanism for a processor to receive coordinates
-     * in their FS code. The matrix expresses a transformation from local space. For a given
-     * fragment the matrix will be applied to the local coordinate that maps to the fragment.
-     *
-     * When the transformation has perspective, the transformed coordinates will have
-     * 3 components. Otherwise they'll have 2.
-     *
-     * This must only be called from the constructor because GrProcessors are immutable. The
-     * processor subclass manages the lifetime of the transformations (this function only stores a
-     * pointer). The GrCoordTransform is typically a member field of the GrProcessor subclass.
-     *
-     * A processor subclass that has multiple methods of construction should always add its coord
-     * transforms in a consistent order. The non-virtual implementation of isEqual() automatically
-     * compares transforms and will assume they line up across the two processor instances.
-     */
-    void addCoordTransform(const GrCoordTransform*);
 
     /**
      * FragmentProcessor subclasses call this from their constructor to register any child
      * FragmentProcessors they have. This must be called AFTER all texture accesses and coord
      * transforms have been added.
      * This is for processors whose shader code will be composed of nested processors whose output
-     * colors will be combined somehow to produce its output color.  Registering these child
+     * colors will be combined somehow to produce its output color. Registering these child
      * processors will allow the ProgramBuilder to automatically handle their transformed coords and
      * texture accesses and mangle their uniform and output color names.
+     *
+     * The SampleUsage parameter describes all of the ways that the child is sampled by the parent.
      */
-    int registerChildProcessor(std::unique_ptr<GrFragmentProcessor> child);
-
-    void setTextureSamplerCnt(int cnt) {
-        SkASSERT(cnt >= 0);
-        fTextureSamplerCnt = cnt;
-    }
+    void registerChild(std::unique_ptr<GrFragmentProcessor> child,
+                       SkSL::SampleUsage sampleUsage = SkSL::SampleUsage::PassThrough());
 
     /**
-     * Helper for implementing onTextureSampler(). E.g.:
-     * return IthTexureSampler(i, fMyFirstSampler, fMySecondSampler, fMyThirdSampler);
+     * This method takes an existing fragment processor, clones all of its children, and registers
+     * the clones as children of this fragment processor.
      */
-    template <typename... Args>
-    static const TextureSampler& IthTextureSampler(int i, const TextureSampler& samp0,
-                                                   const Args&... samps) {
-        return (0 == i) ? samp0 : IthTextureSampler(i - 1, samps...);
+    void cloneAndRegisterAllChildProcessors(const GrFragmentProcessor& src);
+
+    // FP implementations must call this function if their matching GrGLSLFragmentProcessor's
+    // emitCode() function uses the EmitArgs::fSampleCoord variable in generated SkSL.
+    void setUsesSampleCoordsDirectly() {
+        fFlags |= kUsesSampleCoordsDirectly_Flag;
     }
-    inline static const TextureSampler& IthTextureSampler(int i);
 
 private:
     virtual SkPMColor4f constantOutputForConstantInput(const SkPMColor4f& /* inputColor */) const {
         SK_ABORT("Subclass must override this if advertising this optimization.");
-        return SK_PMColor4fTRANSPARENT;
     }
 
     /** Returns a new instance of the appropriate *GL* implementation class
@@ -367,102 +404,90 @@ private:
     /**
      * Subclass implements this to support isEqual(). It will only be called if it is known that
      * the two processors are of the same subclass (i.e. they return the same object from
-     * getFactory()). The processor subclass should not compare its coord transforms as that will
-     * be performed automatically in the non-virtual isEqual().
+     * getFactory()).
      */
     virtual bool onIsEqual(const GrFragmentProcessor&) const = 0;
 
-    virtual const TextureSampler& onTextureSampler(int) const { return IthTextureSampler(0); }
-
-    bool hasSameTransforms(const GrFragmentProcessor&) const;
-
     enum PrivateFlags {
         kFirstPrivateFlag = kAll_OptimizationFlags + 1,
-        kUsesLocalCoords_Flag = kFirstPrivateFlag,
+
+        // Propagate up the FP tree to the root
+        kUsesSampleCoordsIndirectly_Flag = kFirstPrivateFlag,
+
+        // Does not propagate at all
+        kUsesSampleCoordsDirectly_Flag = kFirstPrivateFlag << 1,
+
+        // Propagates down the FP to all its leaves
+        kSampledWithExplicitCoords_Flag = kFirstPrivateFlag << 2,
+        kNetTransformHasPerspective_Flag = kFirstPrivateFlag << 3,
     };
-
-    mutable uint32_t fFlags = 0;
-
-    int fTextureSamplerCnt = 0;
-
-    SkSTArray<4, const GrCoordTransform*, true> fCoordTransforms;
+    void addAndPushFlagToChildren(PrivateFlags flag);
 
     SkSTArray<1, std::unique_ptr<GrFragmentProcessor>, true> fChildProcessors;
+    const GrFragmentProcessor* fParent = nullptr;
+    uint32_t fFlags = 0;
+    SkSL::SampleUsage fUsage;
 
-    typedef GrProcessor INHERITED;
-};
-
-/**
- * Used to represent a texture that is required by a GrFragmentProcessor. It holds a GrTextureProxy
- * along with an associated GrSamplerState. TextureSamplers don't perform any coord manipulation to
- * account for texture origin.
- */
-class GrFragmentProcessor::TextureSampler {
-public:
-    TextureSampler() = default;
-
-    /**
-     * This copy constructor is used by GrFragmentProcessor::clone() implementations. The copy
-     * always takes a new ref on the texture proxy as the new fragment processor will not yet be
-     * in pending execution state.
-     */
-    explicit TextureSampler(const TextureSampler& that)
-            : fProxyRef(sk_ref_sp(that.fProxyRef.get()), that.fProxyRef.ioType())
-            , fSamplerState(that.fSamplerState) {}
-
-    TextureSampler(sk_sp<GrTextureProxy>, const GrSamplerState&);
-
-    explicit TextureSampler(sk_sp<GrTextureProxy>,
-                            GrSamplerState::Filter = GrSamplerState::Filter::kNearest,
-                            GrSamplerState::WrapMode wrapXAndY = GrSamplerState::WrapMode::kClamp);
-
-    TextureSampler& operator=(const TextureSampler&) = delete;
-
-    void reset(sk_sp<GrTextureProxy>, const GrSamplerState&);
-    void reset(sk_sp<GrTextureProxy>,
-               GrSamplerState::Filter = GrSamplerState::Filter::kNearest,
-               GrSamplerState::WrapMode wrapXAndY = GrSamplerState::WrapMode::kClamp);
-
-    bool operator==(const TextureSampler& that) const {
-        return this->proxy()->underlyingUniqueID() == that.proxy()->underlyingUniqueID() &&
-               fSamplerState == that.fSamplerState;
-    }
-
-    bool operator!=(const TextureSampler& other) const { return !(*this == other); }
-
-    // 'instantiate' should only ever be called at flush time.
-    bool instantiate(GrResourceProvider* resourceProvider) const {
-        return SkToBool(fProxyRef.get()->instantiate(resourceProvider));
-    }
-
-    // 'peekTexture' should only ever be called after a successful 'instantiate' call
-    GrTexture* peekTexture() const {
-        SkASSERT(fProxyRef.get()->peekTexture());
-        return fProxyRef.get()->peekTexture();
-    }
-
-    GrTextureProxy* proxy() const { return fProxyRef.get(); }
-    const GrSamplerState& samplerState() const { return fSamplerState; }
-
-    bool isInitialized() const { return SkToBool(fProxyRef.get()); }
-    /**
-     * For internal use by GrFragmentProcessor.
-     */
-    const GrTextureProxyRef* proxyRef() const { return &fProxyRef; }
-
-private:
-    GrTextureProxyRef fProxyRef;
-    GrSamplerState fSamplerState;
+    using INHERITED = GrProcessor;
 };
 
 //////////////////////////////////////////////////////////////////////////////
 
-const GrFragmentProcessor::TextureSampler& GrFragmentProcessor::IthTextureSampler(int i) {
-    SK_ABORT("Illegal texture sampler index");
-    static const TextureSampler kBogus;
-    return kBogus;
-}
-
 GR_MAKE_BITFIELD_OPS(GrFragmentProcessor::OptimizationFlags)
+
+//////////////////////////////////////////////////////////////////////////////
+
+class GrFragmentProcessor::CIter {
+public:
+    explicit CIter(const GrFragmentProcessor& fp) { fFPStack.push_back(&fp); }
+    explicit CIter(const GrPaint&);
+    explicit CIter(const GrPipeline&);
+
+    const GrFragmentProcessor& operator*() const  { return *fFPStack.back(); }
+    const GrFragmentProcessor* operator->() const { return fFPStack.back(); }
+
+    CIter& operator++();
+
+    operator bool() const { return !fFPStack.empty(); }
+
+    bool operator!=(const EndCIter&) { return (bool)*this; }
+
+    // Hopefully this does not actually get called because of RVO.
+    CIter(const CIter&) = default;
+
+    // Because each iterator carries a stack we want to avoid copies.
+    CIter& operator=(const CIter&) = delete;
+
+protected:
+    CIter() = delete;
+
+    SkSTArray<4, const GrFragmentProcessor*, true> fFPStack;
+};
+
+//////////////////////////////////////////////////////////////////////////////
+
+template <typename Src> class GrFragmentProcessor::CIterRange {
+public:
+    explicit CIterRange(const Src& t) : fT(t) {}
+    CIter begin() const { return CIter(fT); }
+    EndCIter end() const { return EndCIter(); }
+
+private:
+    const Src& fT;
+};
+
+/**
+ * Some fragment-processor creation methods have preconditions that might not be satisfied by the
+ * calling code. Those methods can return a `GrFPResult` from their factory methods. If creation
+ * succeeds, the new fragment processor is created and `success` is true. If a precondition is not
+ * met, `success` is set to false and the input FP is returned unchanged.
+ */
+using GrFPResult = std::tuple<bool /*success*/, std::unique_ptr<GrFragmentProcessor>>;
+static inline GrFPResult GrFPFailure(std::unique_ptr<GrFragmentProcessor> fp) {
+    return {false, std::move(fp)};
+}
+static inline GrFPResult GrFPSuccess(std::unique_ptr<GrFragmentProcessor> fp) {
+    return {true, std::move(fp)};
+}
 
 #endif

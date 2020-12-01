@@ -5,15 +5,32 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
-#include "sk_tool_utils.h"
-#include "GrCaps.h"
-#include "GrContext.h"
-#include "GrRenderTargetContextPriv.h"
-#include "SkRRect.h"
-#include "effects/GrRRectEffect.h"
-#include "ops/GrDrawOp.h"
-#include "ops/GrFillRectOp.h"
+#include "gm/gm.h"
+#include "include/core/SkBlendMode.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkRRect.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/core/SkTypes.h"
+#include "include/private/GrSharedEnums.h"
+#include "include/private/GrTypesPriv.h"
+#include "src/gpu/GrCaps.h"
+#include "src/gpu/GrFragmentProcessor.h"
+#include "src/gpu/GrPaint.h"
+#include "src/gpu/GrRenderTargetContext.h"
+#include "src/gpu/effects/GrPorterDuffXferProcessor.h"
+#include "src/gpu/effects/GrRRectEffect.h"
+#include "src/gpu/ops/GrDrawOp.h"
+#include "src/gpu/ops/GrFillRectOp.h"
+#include "tools/ToolUtils.h"
+
+#include <memory>
+#include <utility>
 
 namespace skiagm {
 
@@ -24,7 +41,7 @@ public:
     BigRRectAAEffectGM(const SkRRect& rrect, const char* name)
         : fRRect(rrect)
         , fName(name) {
-        this->setBGColor(sk_tool_utils::color_to_565(SK_ColorBLUE));
+        this->setBGColor(ToolUtils::color_to_565(SK_ColorBLUE));
         // Each test case draws the rrect with gaps around it.
         fTestWidth = SkScalarCeilToInt(rrect.width()) + 2 * kGap;
         fTestHeight = SkScalarCeilToInt(rrect.height()) + 2 * kGap;
@@ -48,7 +65,7 @@ protected:
 
     SkISize onISize() override { return SkISize::Make(fWidth, fHeight); }
 
-    void onDraw(GrContext* context, GrRenderTargetContext* renderTargetContext,
+    void onDraw(GrRecordingContext* context, GrRenderTargetContext* renderTargetContext,
                 SkCanvas* canvas) override {
         SkPaint paint;
 
@@ -72,20 +89,21 @@ protected:
                 SkRRect rrect = fRRect;
                 rrect.offset(SkIntToScalar(x + kGap), SkIntToScalar(y + kGap));
                 const auto& caps = *renderTargetContext->caps()->shaderCaps();
-                auto fp = GrRRectEffect::Make(edgeType, rrect, caps);
-                SkASSERT(fp);
-                if (fp) {
+                auto [success, fp] = GrRRectEffect::Make(/*inputFP=*/nullptr, edgeType, rrect,
+                                                         caps);
+                SkASSERT(success);
+                if (success) {
+                    SkASSERT(fp);
                     GrPaint grPaint;
                     grPaint.setColor4f({ 0, 0, 0, 1.f });
                     grPaint.setXPFactory(GrPorterDuffXPFactory::Get(SkBlendMode::kSrc));
-                    grPaint.addCoverageFragmentProcessor(std::move(fp));
+                    grPaint.setCoverageFragmentProcessor(std::move(fp));
 
                     SkRect bounds = testBounds;
                     bounds.offset(SkIntToScalar(x), SkIntToScalar(y));
 
-                    renderTargetContext->priv().testingOnly_addDrawOp(
-                            GrFillRectOp::Make(context, std::move(grPaint), GrAAType::kNone,
-                                               SkMatrix::I(), bounds));
+                    renderTargetContext->addDrawOp(GrFillRectOp::MakeNonAARect(
+                            context, std::move(grPaint), SkMatrix::I(), bounds));
                 }
             canvas->restore();
             x = x + fTestOffsetX;
@@ -106,7 +124,7 @@ private:
     int fTestOffsetX;
     int fTestOffsetY;
     const char* fName;
-    typedef GM INHERITED;
+    using INHERITED = GM;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -121,4 +139,4 @@ DEF_GM( return new BigRRectAAEffectGM (SkRRect::MakeOval(SkRect::MakeIWH(kSize -
 DEF_GM( return new BigRRectAAEffectGM (SkRRect::MakeRectXY(SkRect::MakeIWH(kSize - 1, kSize - 10), kSize/2.f - 10.f, kSize/2.f - 10.f), "circular_corner"); )
 DEF_GM( return new BigRRectAAEffectGM (SkRRect::MakeRectXY(SkRect::MakeIWH(kSize - 1, kSize - 10), kSize/2.f - 10.f, kSize/2.f - 15.f), "elliptical_corner"); )
 
-}
+}  // namespace skiagm

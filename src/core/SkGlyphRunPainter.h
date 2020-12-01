@@ -8,30 +8,46 @@
 #ifndef SkGlyphRunPainter_DEFINED
 #define SkGlyphRunPainter_DEFINED
 
-#include "SkDistanceFieldGen.h"
-#include "SkGlyphRun.h"
-#include "SkScalerContext.h"
-#include "SkSurfaceProps.h"
-#include "SkTextBlobPriv.h"
+#include "include/core/SkSurfaceProps.h"
+#include "src/core/SkDistanceFieldGen.h"
+#include "src/core/SkGlyphBuffer.h"
+#include "src/core/SkGlyphRun.h"
+#include "src/core/SkScalerContext.h"
+#include "src/core/SkTextBlobPriv.h"
 
 #if SK_SUPPORT_GPU
-#include "text/GrTextContext.h"
-class GrColorSpaceInfo;
+#include "src/gpu/text/GrSDFTOptions.h"
+class GrColorInfo;
 class GrRenderTargetContext;
 #endif
 
+class SkGlyphRunPainterInterface;
+class SkStrikeSpec;
+
+// round and ignorePositionMask are used to calculate the subpixel position of a glyph.
+// The per component (x or y) calculation is:
+//
+//   subpixelOffset = (floor((viewportPosition + rounding) & mask) >> 14) & 3
+//
+// where mask is either 0 or ~0, and rounding is either
+// 1/2 for non-subpixel or 1/8 for subpixel.
+struct SkGlyphPositionRoundingSpec {
+    SkGlyphPositionRoundingSpec(bool isSubpixel, SkAxisAlignment axisAlignment);
+    const SkVector halfAxisSampleFreq;
+    const SkIPoint ignorePositionMask;
+    const SkIPoint ignorePositionFieldMask;
+
+private:
+    static SkVector HalfAxisSampleFreq(bool isSubpixel, SkAxisAlignment axisAlignment);
+    static SkIPoint IgnorePositionMask(bool isSubpixel, SkAxisAlignment axisAlignment);
+    static SkIPoint IgnorePositionFieldMask(bool isSubpixel, SkAxisAlignment axisAlignment);
+};
+
 class SkStrikeCommon {
 public:
-    static SkVector PixelRounding(bool isSubpixel, SkAxisAlignment axisAlignment);
-
-    // This assumes that position has the appropriate rounding term applied.
-    static SkIPoint SubpixelLookup(SkAxisAlignment axisAlignment, SkPoint position);
-
     // An atlas consists of plots, and plots hold glyphs. The minimum a plot can be is 256x256.
     // This means that the maximum size a glyph can be is 256x256.
     static constexpr uint16_t kSkSideTooBigForAtlas = 256;
-
-    static bool GlyphTooBigForAtlas(const SkGlyph& glyph);
 };
 
 class SkGlyphRunListPainter {
@@ -40,96 +56,55 @@ public:
     SkGlyphRunListPainter(const SkSurfaceProps& props,
                           SkColorType colorType,
                           SkColorSpace* cs,
-                          SkStrikeCacheInterface* strikeCache);
+                          SkStrikeForGPUCacheInterface* strikeCache);
 
 #if SK_SUPPORT_GPU
     // The following two ctors are used exclusively by the GPU, and will always use the global
     // strike cache.
-    SkGlyphRunListPainter(const SkSurfaceProps&, const GrColorSpaceInfo&);
+    SkGlyphRunListPainter(const SkSurfaceProps&, const GrColorInfo&);
     explicit SkGlyphRunListPainter(const GrRenderTargetContext& renderTargetContext);
-#endif
-
-    struct PathAndPos {
-        const SkPath* path;
-        SkPoint position;
-    };
-
-    struct GlyphAndPos {
-        const SkGlyph* glyph;
-        SkPoint position;
-    };
+#endif  // SK_SUPPORT_GPU
 
     class BitmapDevicePainter {
     public:
         virtual ~BitmapDevicePainter() = default;
 
-        virtual void paintPaths(SkSpan<const PathAndPos> pathsAndPositions,
-                                SkScalar scale,
-                                const SkPaint& paint) const = 0;
+        virtual void paintPaths(
+                SkDrawableGlyphBuffer* drawables, SkScalar scale, SkPoint origin,
+                const SkPaint& paint) const = 0;
 
-        virtual void paintMasks(SkSpan<const SkMask> masks, const SkPaint& paint) const = 0;
+        virtual void paintMasks(SkDrawableGlyphBuffer* drawables, const SkPaint& paint) const = 0;
     };
 
     void drawForBitmapDevice(
             const SkGlyphRunList& glyphRunList, const SkMatrix& deviceMatrix,
             const BitmapDevicePainter* bitmapDevice);
 
-    template <typename MasksT, typename PathsT>
-    void drawGlyphRunAsBMPWithPathFallback(
-            const SkPaint& paint, const SkFont& font,
-            const SkGlyphRun& glyphRun, SkPoint origin, const SkMatrix& deviceMatrix,
-            MasksT&& processMasks, PathsT&& processPaths);
-
-    // Draw glyphs as paths with fallback to scaled ARGB glyphs if color is needed.
-    // PerPath - perPath(const SkGlyph&, SkPoint position)
-    // FallbackARGB - fallbackARGB(SkSpan<const SkGlyphID>, SkSpan<const SkPoint>)
-    // For each glyph that is not ARGB call perPath. If the glyph is ARGB then store the glyphID
-    // and the position in fallback vectors. After all the glyphs are processed, pass the
-    // fallback glyphIDs and positions to fallbackARGB.
-    template<typename ProcessPathsT, typename ProcessDeviceT, typename ProcessSourceT>
-    void drawGlyphRunAsPathWithARGBFallback(
-            const SkPaint& runPaint, const SkFont& runFont,
-            const SkGlyphRun& glyphRun, SkPoint origin, const SkMatrix& viewMatrix,
-            ProcessPathsT&& processPaths,
-            ProcessDeviceT&& processDevice, ProcessSourceT&& processSource);
-
 #if SK_SUPPORT_GPU
-    template <typename ProcessMasksT, typename ProcessPathsT,
-              typename ProcessDeviceT, typename ProcessSourceT>
-    void drawGlyphRunAsSDFWithARGBFallback(
-            const SkPaint& runPaint, const SkFont& runFont,
-            const SkGlyphRun& glyphRun, SkPoint origin, const SkMatrix& viewMatrix,
-            const GrTextContext::Options& options,
-            ProcessMasksT&& perSDF, ProcessPathsT&& perPath,
-            ProcessDeviceT&& processDevice, ProcessSourceT&& processSource);
-#endif
-
-    // TODO: Make this the canonical check for Skia.
-    static bool ShouldDrawAsPath(const SkPaint& paint, const SkFont& font, const SkMatrix& matrix);
+    // A nullptr for process means that the calls to the cache will be performed, but none of the
+    // callbacks will be called.
+    void processGlyphRun(const SkGlyphRun& glyphRun,
+                         const SkMatrix& drawMatrix,
+                         SkPoint drawOrigin,
+                         const SkPaint& drawPaint,
+                         const SkSurfaceProps& props,
+                         bool contextSupportsDistanceFieldText,
+                         const GrSDFTOptions& options,
+                         SkGlyphRunPainterInterface* process);
+#endif  // SK_SUPPORT_GPU
 
 private:
     SkGlyphRunListPainter(const SkSurfaceProps& props, SkColorType colorType,
-                          SkScalerContextFlags flags, SkStrikeCacheInterface* strikeCache);
+                          SkScalerContextFlags flags, SkStrikeForGPUCacheInterface* strikeCache);
 
     struct ScopedBuffers {
-        ScopedBuffers(SkGlyphRunListPainter* painter, int size);
+        ScopedBuffers(SkGlyphRunListPainter* painter, size_t size);
         ~ScopedBuffers();
         SkGlyphRunListPainter* fPainter;
     };
 
     ScopedBuffers SK_WARN_UNUSED_RESULT ensureBuffers(const SkGlyphRunList& glyphRunList);
-
-    // TODO: Remove once I can hoist ensureBuffers above the list for loop in all cases.
     ScopedBuffers SK_WARN_UNUSED_RESULT ensureBuffers(const SkGlyphRun& glyphRun);
-
-    template<typename ProcessDeviceT, typename ProcessSourceT>
-    void processARGBFallback(SkScalar maxGlyphDimension,
-                             const SkPaint& runPaint,
-                             const SkFont& runFont,
-                             const SkMatrix& viewMatrix,
-                             SkScalar textScale,
-                             ProcessDeviceT&& processDevice,
-                             ProcessSourceT&& processSource);
 
     // The props as on the actual device.
     const SkSurfaceProps fDeviceProps;
@@ -138,17 +113,43 @@ private:
     const SkColorType fColorType;
     const SkScalerContextFlags fScalerContextFlags;
 
-    SkStrikeCacheInterface* const fStrikeCache;
+    SkStrikeForGPUCacheInterface* const fStrikeCache;
 
-    int fMaxRunSize{0};
-    SkAutoTMalloc<SkPoint> fPositions;
-    SkAutoTMalloc<GlyphAndPos> fGlyphPos;
+    SkDrawableGlyphBuffer fDrawable;
+    SkSourceGlyphBuffer fRejects;
+};
 
-    std::vector<GlyphAndPos> fPaths;
+// SkGlyphRunPainterInterface are all the ways that Ganesh generates glyphs. The first
+// distinction is between Device and Source.
+// * Device - the data in the cache is scaled to the device. There is no transformation from the
+//   cache to the screen.
+// * Source - the data in the cache needs to be scaled from the cache to source space using the
+//   factor cacheToSourceScale. When drawn the system must combine cacheToSourceScale and the
+//   deviceView matrix to transform the cache data onto the screen. This allows zooming and
+//   simple animation to reuse the same glyph data by just changing the transform.
+//
+// In addition to transformation type above, Masks, Paths, SDFT, and Fallback (or really the
+// rendering method of last resort) are the different
+// formats of data used from the cache.
+class SkGlyphRunPainterInterface {
+public:
+    virtual ~SkGlyphRunPainterInterface() = default;
 
-    // Vectors for tracking ARGB fallback information.
-    std::vector<SkGlyphID> fARGBGlyphsIDs;
-    std::vector<SkPoint>   fARGBPositions;
+    virtual void processDeviceMasks(const SkZip<SkGlyphVariant, SkPoint>& drawables,
+                                    const SkStrikeSpec& strikeSpec) = 0;
+
+    virtual void processSourceMasks(const SkZip<SkGlyphVariant, SkPoint>& drawables,
+                                    const SkStrikeSpec& strikeSpec) = 0;
+
+    virtual void processSourcePaths(const SkZip<SkGlyphVariant, SkPoint>& drawables,
+                                    const SkFont& runFont,
+                                    const SkStrikeSpec& strikeSpec) = 0;
+
+    virtual void processSourceSDFT(const SkZip<SkGlyphVariant, SkPoint>& drawables,
+                                   const SkStrikeSpec& strikeSpec,
+                                   const SkFont& runFont,
+                                   SkScalar minScale,
+                                   SkScalar maxScale) = 0;
 };
 
 #endif  // SkGlyphRunPainter_DEFINED

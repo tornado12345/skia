@@ -8,9 +8,9 @@
 #ifndef SkSGImage_DEFINED
 #define SkSGImage_DEFINED
 
-#include "SkSGRenderNode.h"
+#include "modules/sksg/include/SkSGRenderNode.h"
 
-#include "SkFilterQuality.h"
+#include "include/core/SkFilterQuality.h"
 
 class SkImage;
 
@@ -40,10 +40,10 @@ protected:
 
 private:
     sk_sp<SkImage>  fImage;
-    SkFilterQuality fQuality   = kLow_SkFilterQuality;
+    SkFilterQuality fQuality   = kNone_SkFilterQuality;
     bool            fAntiAlias = true;
 
-    typedef RenderNode INHERITED;
+    using INHERITED = RenderNode;
 };
 
 } // namespace sksg

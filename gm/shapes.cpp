@@ -5,9 +5,21 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
-#include "SkRandom.h"
-#include "SkRRect.h"
+#include "gm/gm.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkImageInfo.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkPoint.h"
+#include "include/core/SkRRect.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/core/SkTypes.h"
+#include "include/private/SkTArray.h"
+#include "include/utils/SkRandom.h"
 
 namespace skiagm {
 
@@ -24,7 +36,7 @@ protected:
         }
     }
 
-    SkString onShortName() override final { return fName; }
+    SkString onShortName() final { return fName; }
     SkISize onISize() override { return SkISize::Make(500, 500); }
 
     void onOnceBeforeDraw() override {
@@ -82,7 +94,7 @@ protected:
     int                  fSimpleShapeCount;
 
 private:
-    typedef GM INHERITED;
+    using INHERITED = GM;
 };
 
 class SimpleShapesGM : public ShapesGM {
@@ -114,7 +126,7 @@ private:
         }
     }
 
-    typedef ShapesGM INHERITED;
+    using INHERITED = ShapesGM;
 };
 
 class InnerShapesGM : public ShapesGM {
@@ -127,7 +139,7 @@ private:
         for (int i = 0; i < fShapes.count(); i++) {
             const SkRRect& outer = fShapes[i];
             const SkRRect& inner = fShapes[(i * 7 + 11) % fSimpleShapeCount];
-            float s = 0.95f * SkTMin(outer.rect().width() / inner.rect().width(),
+            float s = 0.95f * std::min(outer.rect().width() / inner.rect().width(),
                                      outer.rect().height() / inner.rect().height());
             SkMatrix innerXform;
             float dx = (rand.nextF() - 0.5f) * (outer.rect().width() - s * inner.rect().width());
@@ -149,7 +161,7 @@ private:
         }
     }
 
-    typedef ShapesGM INHERITED;
+    using INHERITED = ShapesGM;
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -159,4 +171,4 @@ DEF_GM( return new SimpleShapesGM(false); )
 DEF_GM( return new InnerShapesGM(true); )
 DEF_GM( return new InnerShapesGM(false); )
 
-}
+}  // namespace skiagm

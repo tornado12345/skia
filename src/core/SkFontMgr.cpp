@@ -5,11 +5,11 @@
  * found in the LICENSE file.
  */
 
-#include "SkFontDescriptor.h"
-#include "SkFontMgr.h"
-#include "SkOnce.h"
-#include "SkStream.h"
-#include "SkTypes.h"
+#include "include/core/SkFontMgr.h"
+#include "include/core/SkStream.h"
+#include "include/core/SkTypes.h"
+#include "include/private/SkOnce.h"
+#include "src/core/SkFontDescriptor.h"
 
 class SkFontStyle;
 class SkTypeface;
@@ -118,11 +118,6 @@ SkTypeface* SkFontMgr::matchFamilyStyleCharacter(const char familyName[], const 
     return this->onMatchFamilyStyleCharacter(familyName, style, bcp47, bcp47Count, character);
 }
 
-SkTypeface* SkFontMgr::matchFaceStyle(const SkTypeface* face,
-                                      const SkFontStyle& fs) const {
-    return this->onMatchFaceStyle(face, fs);
-}
-
 sk_sp<SkTypeface> SkFontMgr::makeFromData(sk_sp<SkData> data, int ttcIndex) const {
     if (nullptr == data) {
         return nullptr;
@@ -164,10 +159,6 @@ sk_sp<SkTypeface> SkFontMgr::legacyMakeTypeface(const char familyName[], SkFontS
     return this->onLegacyMakeTypeface(familyName, style);
 }
 
-sk_sp<SkTypeface> SkFontMgr::onMakeFromStreamArgs(std::unique_ptr<SkStreamAsset> stream,
-                                                  const SkFontArguments& args) const {
-    return this->makeFromStream(std::move(stream), args.getCollectionIndex());
-}
 sk_sp<SkTypeface> SkFontMgr::onMakeFromFontData(std::unique_ptr<SkFontData> data) const {
     return this->makeFromStream(data->detachStream(), data->getIndex());
 }
@@ -274,19 +265,23 @@ SkTypeface* SkFontStyleSet::matchStyleCSS3(const SkFontStyle& pattern) {
         // 1000 is the 'heaviest' recognized weight
         if (pattern.weight() == current.weight()) {
             currentScore += 1000;
-        } else if (pattern.weight() <= 500) {
-            if (400 <= pattern.weight() && pattern.weight() < 450) {
-                if (450 <= current.weight() && current.weight() <= 500) {
-                    // Artificially boost the 500 weight.
-                    // TODO: determine correct number to use.
-                    currentScore += 500;
-                }
-            }
+        // less than 400 prefer lighter weights
+        } else if (pattern.weight() < 400) {
             if (current.weight() <= pattern.weight()) {
                 currentScore += 1000 - pattern.weight() + current.weight();
             } else {
                 currentScore += 1000 - current.weight();
             }
+        // between 400 and 500 prefer heavier up to 500, then lighter weights
+        } else if (pattern.weight() <= 500) {
+            if (current.weight() >= pattern.weight() && current.weight() <= 500) {
+                currentScore += 1000 + pattern.weight() - current.weight();
+            } else if (current.weight() <= pattern.weight()) {
+                currentScore += 500 + current.weight();
+            } else {
+                currentScore += 1000 - current.weight();
+            }
+        // greater than 500 prefer heavier weights
         } else if (pattern.weight() > 500) {
             if (current.weight() > pattern.weight()) {
                 currentScore += 1000 + pattern.weight() - current.weight();

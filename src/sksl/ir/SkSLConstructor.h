@@ -8,10 +8,12 @@
 #ifndef SKSL_CONSTRUCTOR
 #define SKSL_CONSTRUCTOR
 
-#include "SkSLExpression.h"
-#include "SkSLFloatLiteral.h"
-#include "SkSLIntLiteral.h"
-#include "SkSLIRGenerator.h"
+#include "include/private/SkTArray.h"
+#include "src/sksl/SkSLIRGenerator.h"
+#include "src/sksl/ir/SkSLExpression.h"
+#include "src/sksl/ir/SkSLFloatLiteral.h"
+#include "src/sksl/ir/SkSLIntLiteral.h"
+#include "src/sksl/ir/SkSLPrefixExpression.h"
 
 namespace SkSL {
 
@@ -24,34 +26,28 @@ namespace SkSL {
  * Matrix constructors will always consist of either exactly 1 scalar, exactly 1 matrix, or a
  * collection of vectors and scalars totalling exactly the right number of scalar components.
  */
-struct Constructor : public Expression {
-    Constructor(int offset, const Type& type, std::vector<std::unique_ptr<Expression>> arguments)
-    : INHERITED(offset, kConstructor_Kind, type)
-    , fArguments(std::move(arguments)) {}
+class Constructor final : public Expression {
+public:
+    static constexpr Kind kExpressionKind = Kind::kConstructor;
 
-    std::unique_ptr<Expression> constantPropagate(const IRGenerator& irGenerator,
-                                                  const DefinitionMap& definitions) override {
-        if (fArguments.size() == 1 && fArguments[0]->fKind == Expression::kIntLiteral_Kind) {
-            if (fType.isFloat()) {
-                // promote float(1) to 1.0
-                int64_t intValue = ((IntLiteral&) *fArguments[0]).fValue;
-                return std::unique_ptr<Expression>(new FloatLiteral(irGenerator.fContext,
-                                                                    fOffset,
-                                                                    intValue));
-            } else if (fType.isInteger()) {
-                // promote uint(1) to 1u
-                int64_t intValue = ((IntLiteral&) *fArguments[0]).fValue;
-                return std::unique_ptr<Expression>(new IntLiteral(fOffset,
-                                                                  intValue,
-                                                                  &fType));
-            }
-        }
-        return nullptr;
+    Constructor(int offset, const Type* type, ExpressionArray arguments)
+        : INHERITED(offset, kExpressionKind, type)
+        , fArguments(std::move(arguments)) {}
+
+    ExpressionArray& arguments() {
+        return fArguments;
     }
 
-    bool hasSideEffects() const override {
-        for (const auto& arg : fArguments) {
-            if (arg->hasSideEffects()) {
+    const ExpressionArray& arguments() const {
+        return fArguments;
+    }
+
+    std::unique_ptr<Expression> constantPropagate(const IRGenerator& irGenerator,
+                                                  const DefinitionMap& definitions) override;
+
+    bool hasProperty(Property property) const override {
+        for (const std::unique_ptr<Expression>& arg: this->arguments()) {
+            if (arg->hasProperty(property)) {
                 return true;
             }
         }
@@ -59,155 +55,83 @@ struct Constructor : public Expression {
     }
 
     std::unique_ptr<Expression> clone() const override {
-        std::vector<std::unique_ptr<Expression>> cloned;
-        for (const auto& arg : fArguments) {
+        ExpressionArray cloned;
+        cloned.reserve_back(this->arguments().size());
+        for (const std::unique_ptr<Expression>& arg: this->arguments()) {
             cloned.push_back(arg->clone());
         }
-        return std::unique_ptr<Expression>(new Constructor(fOffset, fType, std::move(cloned)));
+        return std::make_unique<Constructor>(fOffset, &this->type(), std::move(cloned));
     }
 
     String description() const override {
-        String result = fType.description() + "(";
-        String separator;
-        for (size_t i = 0; i < fArguments.size(); i++) {
+        String result = this->type().description() + "(";
+        const char* separator = "";
+        for (const std::unique_ptr<Expression>& arg: this->arguments()) {
             result += separator;
-            result += fArguments[i]->description();
+            result += arg->description();
             separator = ", ";
         }
         result += ")";
         return result;
     }
 
-    bool isConstant() const override {
-        for (size_t i = 0; i < fArguments.size(); i++) {
-            if (!fArguments[i]->isConstant()) {
+    const Type& componentType() const {
+        // Returns `float` for constructors of type `float(...)` or `floatN(...)`.
+        const Type& type = this->type();
+        return type.columns() == 1 ? type : type.componentType();
+    }
+
+    bool isCompileTimeConstant() const override {
+        for (const std::unique_ptr<Expression>& arg: this->arguments()) {
+            if (!arg->isCompileTimeConstant()) {
                 return false;
             }
         }
         return true;
     }
 
-    bool compareConstant(const Context& context, const Expression& other) const override {
-        SkASSERT(other.fKind == Expression::kConstructor_Kind && other.fType == fType);
-        Constructor& c = (Constructor&) other;
-        if (c.fType.kind() == Type::kVector_Kind) {
-            for (int i = 0; i < fType.columns(); i++) {
-                if (!this->getVecComponent(i).compareConstant(context, c.getVecComponent(i))) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        // shouldn't be possible to have a constant constructor that isn't a vector or matrix;
-        // a constant scalar constructor should have been collapsed down to the appropriate
-        // literal
-        SkASSERT(fType.kind() == Type::kMatrix_Kind);
-        const FloatLiteral fzero(context, -1, 0);
-        const IntLiteral izero(context, -1, 0);
-        const Expression* zero;
-        if (fType.componentType().isFloat()) {
-            zero = &fzero;
-        } else {
-            SkASSERT(fType.componentType().isInteger());
-            zero = &izero;
-        }
-        for (int col = 0; col < fType.columns(); col++) {
-            for (int row = 0; row < fType.rows(); row++) {
-                const Expression* component1 = getMatComponent(col, row);
-                const Expression* component2 = c.getMatComponent(col, row);
-                if (!(component1 ? component1 : zero)->compareConstant(
-                                                                context,
-                                                                component2 ? *component2 : *zero)) {
-                    return false;
-                }
+    bool isConstantOrUniform() const override {
+        for (const std::unique_ptr<Expression>& arg: this->arguments()) {
+            if (!arg->isConstantOrUniform()) {
+                return false;
             }
         }
         return true;
     }
 
-    const Expression& getVecComponent(int index) const {
-        SkASSERT(fType.kind() == Type::kVector_Kind);
-        if (fArguments.size() == 1 && fArguments[0]->fType.kind() == Type::kScalar_Kind) {
-            return *fArguments[0];
-        }
-        int current = 0;
-        for (const auto& arg : fArguments) {
-            SkASSERT(current <= index);
-            if (arg->fType.kind() == Type::kScalar_Kind) {
-                if (index == current) {
-                    return *arg;
-                }
-                current++;
-            } else {
-                SkASSERT(arg->fType.kind() == Type::kVector_Kind);
-                SkASSERT(arg->fKind == Expression::kConstructor_Kind);
-                if (current + arg->fType.columns() > index) {
-                    return ((const Constructor&) *arg).getVecComponent(index - current);
-                }
-                current += arg->fType.columns();
-            }
-        }
-        ABORT("failed to find vector component %d in %s\n", index, description().c_str());
+    bool compareConstant(const Context& context, const Expression& other) const override;
+
+    template <typename resultType>
+    resultType getVecComponent(int index) const;
+
+    /**
+     * For a literal vector expression, return the float value of the n'th vector component. It is
+     * an error to call this method on an expression which is not a vector of FloatLiterals.
+     */
+    SKSL_FLOAT getFVecComponent(int n) const override {
+        return this->getVecComponent<SKSL_FLOAT>(n);
     }
 
-    double getFVecComponent(int index) const {
-        return this->getVecComponent(index).getConstantFloat();
+    /**
+     * For a literal vector expression, return the integer value of the n'th vector component. It is
+     * an error to call this method on an expression which is not a vector of IntLiterals.
+     */
+    SKSL_INT getIVecComponent(int n) const override {
+        return this->getVecComponent<SKSL_INT>(n);
     }
 
-    int64_t getIVecComponent(int index) const {
-        return this->getVecComponent(index).getConstantInt();
-    }
+    SKSL_FLOAT getMatComponent(int col, int row) const override;
 
-    // null return should be interpreted as zero
-    const Expression* getMatComponent(int col, int row) const {
-        SkASSERT(this->isConstant());
-        SkASSERT(fType.kind() == Type::kMatrix_Kind);
-        SkASSERT(col < fType.columns() && row < fType.rows());
-        if (fArguments.size() == 1) {
-            if (fArguments[0]->fType.kind() == Type::kScalar_Kind) {
-                // single scalar argument, so matrix is of the form:
-                // x 0 0
-                // 0 x 0
-                // 0 0 x
-                // return x if col == row
-                return col == row ? fArguments[0].get() : nullptr;
-            }
-            if (fArguments[0]->fType.kind() == Type::kMatrix_Kind) {
-                SkASSERT(fArguments[0]->fKind == Expression::kConstructor_Kind);
-                // single matrix argument. make sure we're within the argument's bounds.
-                const Type& argType = ((Constructor&) *fArguments[0]).fType;
-                if (col < argType.columns() && row < argType.rows()) {
-                    // within bounds, defer to argument
-                    return ((Constructor&) *fArguments[0]).getMatComponent(col, row);
-                }
-                // out of bounds, return 0
-                return nullptr;
-            }
-        }
-        int currentIndex = 0;
-        int targetIndex = col * fType.rows() + row;
-        for (const auto& arg : fArguments) {
-            SkASSERT(targetIndex >= currentIndex);
-            SkASSERT(arg->fType.rows() == 1);
-            if (currentIndex + arg->fType.columns() > targetIndex) {
-                if (arg->fType.columns() == 1) {
-                    return arg.get();
-                } else {
-                    SkASSERT(arg->fType.kind() == Type::kVector_Kind);
-                    SkASSERT(arg->fKind == Expression::kConstructor_Kind);
-                    return &((Constructor&) *arg).getVecComponent(targetIndex - currentIndex);
-                }
-            }
-            currentIndex += arg->fType.columns();
-        }
-        ABORT("can't happen, matrix component out of bounds");
-    }
+    int64_t getConstantInt() const override;
 
-    std::vector<std::unique_ptr<Expression>> fArguments;
+    SKSL_FLOAT getConstantFloat() const override;
 
-    typedef Expression INHERITED;
+private:
+    ExpressionArray fArguments;
+
+    using INHERITED = Expression;
 };
 
-} // namespace
+}  // namespace SkSL
 
 #endif

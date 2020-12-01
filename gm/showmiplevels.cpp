@@ -5,17 +5,25 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
-#include "sk_tool_utils.h"
+#include "gm/gm.h"
+#include "include/core/SkBitmap.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkColorPriv.h"
+#include "include/core/SkImageInfo.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkPixmap.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkRefCnt.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/private/SkNx.h"
+#include "src/core/SkMipmap.h"
+#include "src/core/SkMipmapBuilder.h"
+#include "tools/ToolUtils.h"
 
-#include "Resources.h"
-#include "SkColorPriv.h"
-#include "SkGradientShader.h"
-#include "SkTypeface.h"
-#include "SkStream.h"
-#include "SkPaint.h"
-#include "SkMipMap.h"
-#include "Resources.h"
+#include <math.h>
 
 #define SHOW_MIP_COLOR  0xFF000000
 
@@ -51,7 +59,6 @@ static SkBitmap make_bitmap2(int w, int h) {
     return bm;
 }
 
-#include "SkNx.h"
 static SkBitmap make_bitmap3(int w, int h) {
     SkBitmap bm;
     bm.allocN32Pixels(w, h);
@@ -118,7 +125,7 @@ protected:
 
     static void DrawAndFrame(SkCanvas* canvas, const SkBitmap& orig, SkScalar x, SkScalar y) {
         SkBitmap bm;
-        sk_tool_utils::copy_to(&bm, orig.colorType(), orig);
+        ToolUtils::copy_to(&bm, orig.colorType(), orig);
         apply_gamma(bm);
 
         canvas->drawBitmap(bm, x, y, nullptr);
@@ -135,10 +142,10 @@ protected:
         SkPixmap prevPM;
         baseBM.peekPixels(&prevPM);
 
-        sk_sp<SkMipMap> mm(SkMipMap::Build(baseBM, nullptr));
+        sk_sp<SkMipmap> mm(SkMipmap::Build(baseBM, nullptr));
 
         int index = 0;
-        SkMipMap::Level level;
+        SkMipmap::Level level;
         SkScalar scale = 0.5f;
         while (mm->extractLevel(SkSize::Make(scale, scale), &level)) {
             SkBitmap bm = func(prevPM, level.fPixmap);
@@ -169,7 +176,7 @@ protected:
     }
 
     void onOnceBeforeDraw() override {
-        fBM[0] = sk_tool_utils::create_checkerboard_bitmap(fN, fN, SK_ColorBLACK, SK_ColorWHITE, 2);
+        fBM[0] = ToolUtils::create_checkerboard_bitmap(fN, fN, SK_ColorBLACK, SK_ColorWHITE, 2);
         fBM[1] = make_bitmap(fN, fN);
         fBM[2] = make_bitmap2(fN, fN);
         fBM[3] = make_bitmap3(fN, fN);
@@ -187,7 +194,7 @@ protected:
     }
 
 private:
-    typedef skiagm::GM INHERITED;
+    using INHERITED = skiagm::GM;
 };
 DEF_GM( return new ShowMipLevels(255); )
 DEF_GM( return new ShowMipLevels(256); )
@@ -196,7 +203,7 @@ DEF_GM( return new ShowMipLevels(256); )
 
 void copy_to(SkBitmap* dst, SkColorType dstColorType, const SkBitmap& src) {
     if (kGray_8_SkColorType == dstColorType) {
-        return sk_tool_utils::copy_to_g8(dst, src);
+        return ToolUtils::copy_to_g8(dst, src);
     }
 
     const SkBitmap* srcPtr = &src;
@@ -206,7 +213,7 @@ void copy_to(SkBitmap* dst, SkColorType dstColorType, const SkBitmap& src) {
         srcPtr = &tmp;
     }
 
-    sk_tool_utils::copy_to(dst, dstColorType, *srcPtr);
+    ToolUtils::copy_to(dst, dstColorType, *srcPtr);
 }
 
 /**
@@ -243,10 +250,10 @@ protected:
         SkScalar x = 4;
         SkScalar y = 4;
 
-        sk_sp<SkMipMap> mm(SkMipMap::Build(baseBM, nullptr));
+        sk_sp<SkMipmap> mm(SkMipmap::Build(baseBM, nullptr));
 
         int index = 0;
-        SkMipMap::Level level;
+        SkMipmap::Level level;
         SkScalar scale = 0.5f;
         while (mm->extractLevel(SkSize::Make(scale, scale), &level)) {
             SkBitmap bm;
@@ -282,8 +289,7 @@ protected:
     }
 
     void onOnceBeforeDraw() override {
-        fBM[0] = sk_tool_utils::create_checkerboard_bitmap(fW, fH,
-                                                           SHOW_MIP_COLOR, SK_ColorWHITE, 2);
+        fBM[0] = ToolUtils::create_checkerboard_bitmap(fW, fH, SHOW_MIP_COLOR, SK_ColorWHITE, 2);
         fBM[1] = make_bitmap(fW, fH);
         fBM[2] = make_bitmap2(fW, fH);
         fBM[3] = make_bitmap3(fW, fH);
@@ -301,9 +307,69 @@ protected:
     }
 
 private:
-    typedef skiagm::GM INHERITED;
+    using INHERITED = skiagm::GM;
 };
 DEF_GM( return new ShowMipLevels2(255, 255); )
 DEF_GM( return new ShowMipLevels2(256, 255); )
 DEF_GM( return new ShowMipLevels2(255, 256); )
 DEF_GM( return new ShowMipLevels2(256, 256); )
+
+#include "tools/Resources.h"
+
+class ShowMipLevels3 : public skiagm::GM {
+    sk_sp<SkImage> fImg;
+
+    SkString onShortName() override { return SkString("showmiplevels_explicit"); }
+
+    SkISize onISize() override { return {1130, 970}; }
+
+    void onOnceBeforeDraw() override {
+        fImg = GetResourceAsImage("images/ship.png");
+        fImg = fImg->makeRasterImage(); // makeWithMips only works on raster for now
+
+        const SkColor colors[] = { SK_ColorRED, SK_ColorGREEN, SK_ColorBLUE };
+
+        SkMipmapBuilder builder(fImg->imageInfo());
+        for (int i = 0; i < builder.countLevels(); ++i) {
+            auto surf = SkSurface::MakeRasterDirect(builder.level(i));
+            surf->getCanvas()->drawColor(colors[i % SK_ARRAY_COUNT(colors)]);
+        }
+        fImg = builder.attachTo(fImg.get());
+    }
+
+    DrawResult onDraw(SkCanvas* canvas, SkString*) override {
+        if (canvas->recordingContext()) {
+            // mips not supported yet
+            return DrawResult::kSkip;
+        }
+
+        canvas->drawColor(0xFFDDDDDD);
+
+        canvas->translate(10, 10);
+        for (auto mm : {SkMipmapMode::kNone, SkMipmapMode::kNearest, SkMipmapMode::kLinear}) {
+            for (auto fm : {SkFilterMode::kNearest, SkFilterMode::kLinear}) {
+                canvas->translate(0, draw_downscaling(canvas, {fm, mm}));
+            }
+        }
+        return DrawResult::kOk;
+    }
+
+private:
+    SkScalar draw_downscaling(SkCanvas* canvas, SkSamplingOptions sampling) {
+        SkAutoCanvasRestore acr(canvas, true);
+
+        SkPaint paint;
+        SkRect r = {0, 0, 150, 150};
+        for (float scale = 1; scale >= 0.1f; scale *= 0.7f) {
+            SkMatrix matrix = SkMatrix::Scale(scale, scale);
+            paint.setShader(fImg->makeShader(SkTileMode::kRepeat, SkTileMode::kRepeat,
+                                             sampling, &matrix));
+            canvas->drawRect(r, paint);
+            canvas->translate(r.width() + 10, 0);
+        }
+        return r.height() + 10;
+    }
+
+    using INHERITED = skiagm::GM;
+};
+DEF_GM( return new ShowMipLevels3; )

@@ -8,7 +8,8 @@
 #ifndef SKSL_POSITION
 #define SKSL_POSITION
 
-#include "SkSLUtil.h"
+#include "src/sksl/SkSLString.h"
+#include "src/sksl/SkSLUtil.h"
 
 namespace SkSL {
 
@@ -33,6 +34,6 @@ struct Position {
     int fColumn;
 };
 
-} // namespace
+}  // namespace SkSL
 
 #endif

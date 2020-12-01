@@ -5,8 +5,8 @@
  * found in the LICENSE file.
  */
 
-#include "NFAtoDFA.h"
-#include "RegexParser.h"
+#include "src/sksl/lex/NFAtoDFA.h"
+#include "src/sksl/lex/RegexParser.h"
 
 #include <fstream>
 #include <sstream>
@@ -42,15 +42,14 @@ void writeH(const DFA& dfa, const char* lexer, const char* token,
     out << "namespace SkSL {\n";
     out << "\n";
     out << "struct " << token << " {\n";
-    out << "    enum Kind {\n";
+    out << "    enum class Kind {\n";
     for (const std::string& t : tokens) {
-        out << "        #undef " << t << "\n";
-        out << "        " << t << ",\n";
+        out << "        TK_" << t << ",\n";
     }
     out << "    };\n";
     out << "\n";
     out << "    " << token << "()\n";
-    out << "    : fKind(Kind::INVALID)\n";
+    out << "    : fKind(Kind::TK_INVALID)\n";
     out << "    , fOffset(-1)\n";
     out << "    , fLength(-1) {}\n";
     out << "\n";
@@ -98,6 +97,9 @@ void writeCPP(const DFA& dfa, const char* lexer, const char* token, const char* 
     for (const auto& row : dfa.fTransitions) {
         states = std::max(states, row.size());
     }
+    // arbitrarily-chosen character which is greater than START_CHAR and should not appear in actual
+    // input
+    out << "static const uint8_t INVALID_CHAR = 18;";
     out << "static int8_t mappings[" << dfa.fCharMappings.size() << "] = {\n    ";
     const char* separator = "";
     for (int m : dfa.fCharMappings) {
@@ -139,15 +141,22 @@ void writeCPP(const DFA& dfa, const char* lexer, const char* token, const char* 
     out << "    // a bit.\n";
     out << "    int32_t startOffset = fOffset;\n";
     out << "    if (startOffset == fLength) {\n";
-    out << "        return " << token << "(" << token << "::END_OF_FILE, startOffset, 0);\n";
+    out << "        return " << token << "(" << token << "::Kind::TK_END_OF_FILE, startOffset,"
+           "0);\n";
     out << "    }\n";
     out << "    int16_t state = 1;\n";
-    out << "    while (fOffset < fLength) {\n";
-    out << "        if ((uint8_t) fText[fOffset] >= " << dfa.fCharMappings.size() << ") {";
-    out << "            ++fOffset;\n";
-    out << "            break;";
+    out << "    for (;;) {\n";
+    out << "        if (fOffset >= fLength) {\n";
+    out << "            if (accepts[state] == -1) {\n";
+    out << "                return Token(Token::Kind::TK_END_OF_FILE, startOffset, 0);\n";
+    out << "            }\n";
+    out << "            break;\n";
+    out << "        }\n";
+    out << "        uint8_t c = (uint8_t) fText[fOffset];";
+    out << "        if (c <= 8 || c >= " << dfa.fCharMappings.size() << ") {";
+    out << "            c = INVALID_CHAR;";
     out << "        }";
-    out << "        int16_t newState = transitions[mappings[(int) fText[fOffset]]][state];\n";
+    out << "        int16_t newState = transitions[mappings[c]][state];\n";
     out << "        if (!newState) {\n";
     out << "            break;\n";
     out << "        }\n";
@@ -169,6 +178,12 @@ void process(const char* inPath, const char* lexer, const char* token, const cha
     std::string line;
     std::ifstream in(inPath);
     while (std::getline(in, line)) {
+        if (line.length() == 0) {
+            continue;
+        }
+        if (line.length() >= 2 && line[0] == '/' && line[1] == '/') {
+            continue;
+        }
         std::istringstream split(line);
         std::string name, delimiter, pattern;
         if (split >> name >> delimiter >> pattern) {
@@ -194,7 +209,7 @@ void process(const char* inPath, const char* lexer, const char* token, const cha
     NFAtoDFA converter(&nfa);
     DFA dfa = converter.convert();
     writeH(dfa, lexer, token, tokens, hPath);
-    writeCPP(dfa, lexer, token, (std::string("SkSL") + lexer + ".h").c_str(), cppPath);
+    writeCPP(dfa, lexer, token, (std::string("src/sksl/SkSL") + lexer + ".h").c_str(), cppPath);
 }
 
 int main(int argc, const char** argv) {

@@ -5,16 +5,16 @@
  * found in the LICENSE file.
  */
 
-#include "CodecPriv.h"
-#include "Resources.h"
-#include "SkAndroidCodec.h"
-#include "SkBitmap.h"
-#include "SkCanvas.h"
-#include "SkData.h"
-#include "SkImage.h"
-#include "SkStream.h"
-#include "SkTypes.h"
-#include "Test.h"
+#include "include/codec/SkAndroidCodec.h"
+#include "include/core/SkBitmap.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkData.h"
+#include "include/core/SkImage.h"
+#include "include/core/SkStream.h"
+#include "include/core/SkTypes.h"
+#include "tests/CodecPriv.h"
+#include "tests/Test.h"
+#include "tools/Resources.h"
 
 static unsigned char gGIFData[] = {
   0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x03, 0x00, 0x03, 0x00, 0xe3, 0x08,
@@ -236,6 +236,52 @@ DEF_TEST(Gif, reporter) {
     test_interlaced_gif_data(reporter, static_cast<void *>(gInterlacedGIF),
                              100);  // 100 is missing a few bytes
     // "libgif warning [interlace DGifGetLine]"
+}
+
+DEF_TEST(Codec_GifInterlacedTruncated, r) {
+    // Check that gInterlacedGIF is exactly 102 bytes long, and that the final
+    // 30 bytes, in the half-open range [72, 102), consists of 0x1b (indicating
+    // a block of 27 bytes), then those 27 bytes, then 0x00 (end of the blocks)
+    // then 0x3b (end of the GIF).
+    if ((sizeof(gInterlacedGIF) != 102) ||
+        (gInterlacedGIF[72] != 0x1b) ||
+        (gInterlacedGIF[100] != 0x00) ||
+        (gInterlacedGIF[101] != 0x3b)) {
+        ERRORF(r, "Invalid gInterlacedGIF data");
+        return;
+    }
+
+    // We want to test the GIF codec's output on some (but not all) of the
+    // LZW-compressed data. As is, there is only one block of LZW-compressed
+    // data, 27 bytes long. Wuffs can output partial results from a partial
+    // block, but some other GIF implementations output intermediate rows only
+    // on block boundaries, so truncating to a prefix of gInterlacedGIF isn't
+    // enough. We also have to modify the block size down from 0x1b so that the
+    // edited version still contains a complete block. In this case, it's a
+    // block of 10 bytes.
+    unsigned char data[83];
+    memcpy(data, gInterlacedGIF, sizeof(data));
+    data[72] = sizeof(data) - 73;
+
+    // Just like test_interlaced_gif_data, check that we get a 9x9 image.
+    SkBitmap bm;
+    bool imageDecodeSuccess = decode_memory(data, sizeof(data), &bm);
+    REPORTER_ASSERT(r, imageDecodeSuccess);
+    REPORTER_ASSERT(r, bm.width() == 9);
+    REPORTER_ASSERT(r, bm.height() == 9);
+
+    // For an interlaced, non-transparent image, we thicken or replicate the
+    // rows of earlier interlace passes so that, when e.g. decoding a GIF
+    // sourced from a slow network connection, we show a richer intermediate
+    // image while waiting for the complete image. This replication is
+    // sometimes described as a "Haeberli inspired technique".
+    //
+    // For a 9 pixel high image, interlacing shuffles the row order to be: 0,
+    // 8, 4, 2, 6, 1, 3, 5, 7. Even though truncating to 10 bytes of
+    // LZW-compressed data only explicitly contains completed rows 0 and 8, we
+    // still expect row 7 to be set, due to replication, and therefore not
+    // transparent black (zero).
+    REPORTER_ASSERT(r, bm.getColor(0, 7) != 0);
 }
 
 // Regression test for decoding a gif image with sampleSize of 4, which was
@@ -461,5 +507,97 @@ DEF_TEST(Codec_gif_out_of_palette, r) {
         REPORTER_ASSERT(r, actual == pixel.expected,
                         "pixel (%i,%i) mismatch! expected: %x actual: %x",
                         pixel.x, pixel.y, pixel.expected, actual);
+    }
+}
+
+// This tests decoding the GIF image created by this script:
+// https://raw.githubusercontent.com/google/wuffs/6c2fb9a2fd9e3334ee7dabc1ad60bfc89158084f/test/data/artificial/gif-transparent-index.gif.make-artificial.txt
+//
+// It is a 4x2 animated image with 2 frames. The first frame is full of various
+// red pixels. The second frame overlays a 3x1 rectangle at (1, 1): light blue,
+// transparent, dark blue.
+DEF_TEST(Codec_AnimatedTransparentGif, r) {
+    const char* path = "images/gif-transparent-index.gif";
+    auto data = GetResourceAsData(path);
+    if (!data) {
+        ERRORF(r, "failed to find %s", path);
+        return;
+    }
+
+    auto codec = SkCodec::MakeFromData(std::move(data));
+    if (!codec) {
+        ERRORF(r, "Could not create codec from %s", path);
+        return;
+    }
+
+    SkImageInfo info = codec->getInfo();
+    if ((info.width() != 4) || (info.height() != 2) || (codec->getFrameInfo().size() != 2)) {
+        ERRORF(r, "Unexpected image info");
+        return;
+    }
+
+    for (bool use565 : { false, true }) {
+        SkBitmap bm;
+        bm.allocPixels(use565 ? info.makeColorType(kRGB_565_SkColorType) : info);
+
+        for (int i = 0; i < 2; i++) {
+            SkCodec::Options options;
+            options.fFrameIndex = i;
+            options.fPriorFrame = (i > 0) ? (i - 1) : SkCodec::kNoFrame;
+            auto result = codec->getPixels(bm.pixmap(), &options);
+#ifdef SK_HAS_WUFFS_LIBRARY
+            // No-op. Wuffs' GIF decoder supports animated 565.
+#else
+            if (use565 && i > 0) {
+                // Unsupported. Quoting libgifcodec/SkLibGifCodec.cpp:
+                //
+                // In theory, we might be able to support this, but it's not
+                // clear that it is necessary (Chromium does not decode to 565,
+                // and Android does not decode frames beyond the first).
+                REPORTER_ASSERT(r, result != SkCodec::kSuccess,
+                                "Unexpected success to decode frame %i", i);
+                continue;
+            }
+#endif
+            REPORTER_ASSERT(r, result == SkCodec::kSuccess, "Failed to decode frame %i", i);
+
+            // Per above: the first frame is full of various red pixels.
+            SkColor expectedPixels[2][4] = {
+                { 0xFF800000, 0xFF900000, 0xFFA00000, 0xFFB00000 },
+                { 0xFFC00000, 0xFFD00000, 0xFFE00000, 0xFFF00000 },
+            };
+            if (use565) {
+                // For kRGB_565_SkColorType, copy the red channel's high 3 bits
+                // to its low 3 bits.
+                expectedPixels[0][0] = 0xFF840000;
+                expectedPixels[0][1] = 0xFF940000;
+                expectedPixels[0][2] = 0xFFA50000;
+                expectedPixels[0][3] = 0xFFB50000;
+                expectedPixels[1][0] = 0xFFC60000;
+                expectedPixels[1][1] = 0xFFD60000;
+                expectedPixels[1][2] = 0xFFE70000;
+                expectedPixels[1][3] = 0xFFF70000;
+            }
+            if (i > 0) {
+                // Per above: the second frame overlays a 3x1 rectangle at (1,
+                // 1): light blue, transparent, dark blue.
+                //
+                // Again, for kRGB_565_SkColorType, copy the blue channel's
+                // high 3 bits to its low 3 bits.
+                expectedPixels[1][1] = use565 ? 0xFF0000FF : 0xFF0000FF;
+                expectedPixels[1][3] = use565 ? 0xFF000052 : 0xFF000055;
+            }
+
+            for (int y = 0; y < 2; y++) {
+                for (int x = 0; x < 4; x++) {
+                    auto expected = expectedPixels[y][x];
+                    auto actual = bm.getColor(x, y);
+                    REPORTER_ASSERT(r, actual == expected,
+                                    "use565 %i, frame %i, pixel (%i,%i) "
+                                    "mismatch! expected: %x actual: %x",
+                                    (int)use565, i, x, y, expected, actual);
+                }
+            }
+        }
     }
 }

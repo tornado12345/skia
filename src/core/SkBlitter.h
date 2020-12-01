@@ -8,17 +8,17 @@
 #ifndef SkBlitter_DEFINED
 #define SkBlitter_DEFINED
 
-#include "SkAutoMalloc.h"
-#include "SkColor.h"
-#include "SkCoverageDelta.h"
-#include "SkImagePriv.h"
-#include "SkRect.h"
-#include "SkRegion.h"
-#include "SkShaderBase.h"
-#include "SkTo.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkRegion.h"
+#include "include/private/SkTo.h"
+#include "src/core/SkAutoMalloc.h"
+#include "src/core/SkImagePriv.h"
+#include "src/shaders/SkShaderBase.h"
 
 class SkArenaAlloc;
 class SkMatrix;
+class SkMatrixProvider;
 class SkPaint;
 class SkPixmap;
 struct SkMask;
@@ -32,12 +32,6 @@ struct SkMask;
 class SkBlitter {
 public:
     virtual ~SkBlitter();
-
-    // The actual blitter may speedup the process by rewriting this in a more efficient way.
-    // For example, one may avoid some virtual blitAntiH calls by directly calling
-    // SkBlitRow::Color32.
-    virtual void blitCoverageDeltas(SkCoverageDeltaList* deltas, const SkIRect& clip,
-                                    bool isEvenOdd, bool isInverse, bool isConvex);
 
     /// Blit a horizontal run of one or more pixels.
     virtual void blitH(int x, int y, int width) = 0;
@@ -147,16 +141,17 @@ public:
         Return the correct blitter to use given the specified context.
      */
     static SkBlitter* Choose(const SkPixmap& dst,
-                             const SkMatrix& matrix,
+                             const SkMatrixProvider& matrixProvider,
                              const SkPaint& paint,
                              SkArenaAlloc*,
-                             bool drawCoverage = false);
+                             bool drawCoverage,
+                             sk_sp<SkShader> clipShader);
 
     static SkBlitter* ChooseSprite(const SkPixmap& dst,
                                    const SkPaint&,
                                    const SkPixmap& src,
                                    int left, int top,
-                                   SkArenaAlloc*);
+                                   SkArenaAlloc*, sk_sp<SkShader> clipShader);
     ///@}
 
     static bool UseRasterPipelineBlitter(const SkPixmap&, const SkPaint&, const SkMatrix&);
@@ -194,8 +189,8 @@ public:
     void blitAntiH(int x, int y, const SkAlpha[], const int16_t runs[]) override;
     void blitV(int x, int y, int height, SkAlpha alpha) override;
     void blitRect(int x, int y, int width, int height) override;
-    virtual void blitAntiRect(int x, int y, int width, int height,
-                     SkAlpha leftAlpha, SkAlpha rightAlpha) override;
+    void blitAntiRect(int x, int y, int width, int height,
+                      SkAlpha leftAlpha, SkAlpha rightAlpha) override;
     void blitMask(const SkMask&, const SkIRect& clip) override;
     const SkPixmap* justAnOpaqueColor(uint32_t* value) override;
 

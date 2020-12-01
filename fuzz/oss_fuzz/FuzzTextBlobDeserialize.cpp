@@ -5,13 +5,13 @@
  * found in the LICENSE file.
  */
 
-#include "SkCanvas.h"
-#include "SkFontMgrPriv.h"
-#include "SkPaint.h"
-#include "SkReadBuffer.h"
-#include "SkSurface.h"
-#include "SkTestFontMgr.h"
-#include "SkTextBlobPriv.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkSurface.h"
+#include "src/core/SkFontMgrPriv.h"
+#include "src/core/SkReadBuffer.h"
+#include "src/core/SkTextBlobPriv.h"
+#include "tools/fonts/TestFontMgr.h"
 
 void FuzzTextBlobDeserialize(SkReadBuffer& buf) {
     auto tb = SkTextBlobPriv::MakeFromBuffer(buf);
@@ -27,9 +27,13 @@ void FuzzTextBlobDeserialize(SkReadBuffer& buf) {
     s->getCanvas()->drawTextBlob(tb, 200, 200, SkPaint());
 }
 
-#if defined(IS_FUZZING_WITH_LIBFUZZER)
+// TODO(kjlubick): remove IS_FUZZING... after https://crrev.com/c/2410304 lands
+#if defined(SK_BUILD_FOR_LIBFUZZER) || defined(IS_FUZZING_WITH_LIBFUZZER)
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-    gSkFontMgr_DefaultFactory = &sk_tool_utils::MakePortableFontMgr;
+    if (size > 1024) {
+        return 0;
+    }
+    gSkFontMgr_DefaultFactory = &ToolUtils::MakePortableFontMgr;
     SkReadBuffer buf(data, size);
     FuzzTextBlobDeserialize(buf);
     return 0;

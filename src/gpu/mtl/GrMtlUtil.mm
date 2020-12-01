@@ -5,117 +5,30 @@
  * found in the LICENSE file.
  */
 
-#include "GrMtlUtil.h"
+#include "src/gpu/mtl/GrMtlUtil.h"
 
-#include "GrTypesPriv.h"
-#include "GrSurface.h"
-#include "mtl/GrMtlGpu.h"
-#include "mtl/GrMtlTexture.h"
-#include "mtl/GrMtlRenderTarget.h"
-#include "SkSLCompiler.h"
+#include "include/gpu/GrBackendSurface.h"
+#include "include/private/GrTypesPriv.h"
+#include "include/private/SkMutex.h"
+#include "src/gpu/GrShaderUtils.h"
+#include "src/gpu/GrSurface.h"
+#include "src/gpu/mtl/GrMtlGpu.h"
+#include "src/gpu/mtl/GrMtlRenderTarget.h"
+#include "src/gpu/mtl/GrMtlTexture.h"
+#include "src/sksl/SkSLCompiler.h"
 
 #import <Metal/Metal.h>
 
-#define PRINT_MSL 0 // print out the MSL code generated
-
-bool GrPixelConfigToMTLFormat(GrPixelConfig config, MTLPixelFormat* format) {
-    MTLPixelFormat dontCare;
-    if (!format) {
-        format = &dontCare;
-    }
-
-    switch (config) {
-        case kUnknown_GrPixelConfig:
-            return false;
-        case kRGBA_8888_GrPixelConfig:
-            *format = MTLPixelFormatRGBA8Unorm;
-            return true;
-        case kRGB_888_GrPixelConfig:
-            // TODO: MTLPixelFormatRGB8Unorm
-            return false;
-        case kRGB_888X_GrPixelConfig:
-            *format = MTLPixelFormatRGBA8Unorm;
-            return true;
-        case kRG_88_GrPixelConfig:
-            // TODO: MTLPixelFormatRG8Unorm
-            return false;
-        case kBGRA_8888_GrPixelConfig:
-            *format = MTLPixelFormatBGRA8Unorm;
-            return true;
-        case kSRGBA_8888_GrPixelConfig:
-            *format = MTLPixelFormatRGBA8Unorm_sRGB;
-            return true;
-        case kSBGRA_8888_GrPixelConfig:
-            *format = MTLPixelFormatBGRA8Unorm_sRGB;
-            return true;
-        case kRGBA_1010102_GrPixelConfig:
-            *format = MTLPixelFormatRGB10A2Unorm;
-            return true;
-        case kRGB_565_GrPixelConfig:
-#ifdef SK_BUILD_FOR_IOS
-            *format = MTLPixelFormatB5G6R5Unorm;
-            return true;
-#else
-            return false;
+#if !__has_feature(objc_arc)
+#error This file must be compiled with Arc. Use -fobjc-arc flag
 #endif
-        case kRGBA_4444_GrPixelConfig:
-#ifdef SK_BUILD_FOR_IOS
-            *format = MTLPixelFormatABGR4Unorm;
-            return true;
-#else
-            return false;
-#endif
-        case kAlpha_8_GrPixelConfig: // fall through
-        case kAlpha_8_as_Red_GrPixelConfig:
-            *format = MTLPixelFormatR8Unorm;
-            return true;
-        case kAlpha_8_as_Alpha_GrPixelConfig:
-            return false;
-        case kGray_8_GrPixelConfig: // fall through
-        case kGray_8_as_Red_GrPixelConfig:
-            *format = MTLPixelFormatR8Unorm;
-            return true;
-        case kGray_8_as_Lum_GrPixelConfig:
-            return false;
-        case kRGBA_float_GrPixelConfig:
-            *format = MTLPixelFormatRGBA32Float;
-            return true;
-        case kRG_float_GrPixelConfig:
-            *format = MTLPixelFormatRG32Float;
-            return true;
-        case kRGBA_half_GrPixelConfig:
-            *format = MTLPixelFormatRGBA16Float;
-            return true;
-        case kAlpha_half_GrPixelConfig: // fall through
-        case kAlpha_half_as_Red_GrPixelConfig:
-            *format = MTLPixelFormatR16Float;
-            return true;
-        case kRGB_ETC1_GrPixelConfig:
-#ifdef SK_BUILD_FOR_IOS
-            *format = MTLPixelFormatETC2_RGB8;
-            return true;
-#else
-            return false;
-#endif
-    }
-    SK_ABORT("Unexpected config");
-    return false;
-}
 
-id<MTLTexture> GrGetMTLTexture(const void* mtlTexture, GrWrapOwnership wrapOwnership) {
-    if (GrWrapOwnership::kAdopt_GrWrapOwnership == wrapOwnership) {
-        return (__bridge_transfer id<MTLTexture>)mtlTexture;
-    } else {
-        return (__bridge id<MTLTexture>)mtlTexture;
-    }
-}
-
-const void* GrGetPtrFromId(id idObject) {
-    return (__bridge const void*)idObject;
-}
-
-const void* GrReleaseId(id idObject) {
-    return (__bridge_retained const void*)idObject;
+NSError* GrCreateMtlError(NSString* description, GrMtlErrorCode errorCode) {
+    NSDictionary* userInfo = [NSDictionary dictionaryWithObject:description
+                                                         forKey:NSLocalizedDescriptionKey];
+    return [NSError errorWithDomain:@"org.skia.ganesh"
+                               code:(NSInteger)errorCode
+                           userInfo:userInfo];
 }
 
 MTLTextureDescriptor* GrGetMTLTextureDescriptor(id<MTLTexture> mtlTexture) {
@@ -128,76 +41,182 @@ MTLTextureDescriptor* GrGetMTLTextureDescriptor(id<MTLTexture> mtlTexture) {
     texDesc.mipmapLevelCount = mtlTexture.mipmapLevelCount;
     texDesc.arrayLength = mtlTexture.arrayLength;
     texDesc.sampleCount = mtlTexture.sampleCount;
-    texDesc.usage = mtlTexture.usage;
+    if (@available(macOS 10.11, iOS 9.0, *)) {
+        texDesc.usage = mtlTexture.usage;
+    }
     return texDesc;
 }
 
-#if PRINT_MSL
-void print_msl(const char* source) {
-    SkTArray<SkString> lines;
-    SkStrSplit(source, "\n", kStrict_SkStrSplitMode, &lines);
-    for (int i = 0; i < lines.count(); i++) {
-        SkString& line = lines[i];
-        line.prependf("%4i\t", i + 1);
-        SkDebugf("%s\n", line.c_str());
-    }
-}
+// Print the source code for all shaders generated.
+static const bool gPrintSKSL = false;
+static const bool gPrintMSL = false;
+
+id<MTLLibrary> GrGenerateMtlShaderLibrary(const GrMtlGpu* gpu,
+                                          const SkSL::String& sksl,
+                                          SkSL::Program::Kind programKind,
+                                          const SkSL::Program::Settings& settings,
+                                          SkSL::String* msl,
+                                          SkSL::Program::Inputs* outInputs,
+                                          GrContextOptions::ShaderErrorHandler* errorHandler) {
+#ifdef SK_DEBUG
+    SkSL::String src = GrShaderUtils::PrettyPrint(sksl);
+#else
+    const SkSL::String& src = sksl;
 #endif
-
-id<MTLLibrary> GrCompileMtlShaderLibrary(const GrMtlGpu* gpu,
-                                         const char* shaderString,
-                                         SkSL::Program::Kind kind,
-                                         const SkSL::Program::Settings& settings,
-                                         SkSL::Program::Inputs* outInputs) {
+    SkSL::Compiler* compiler = gpu->shaderCompiler();
     std::unique_ptr<SkSL::Program> program =
-            gpu->shaderCompiler()->convertProgram(kind,
-                                                  SkSL::String(shaderString),
+            gpu->shaderCompiler()->convertProgram(programKind,
+                                                  src,
                                                   settings);
+    if (!program || !compiler->toMetal(*program, msl)) {
+        errorHandler->compileError(src.c_str(), compiler->errorText().c_str());
+        return nil;
+    }
 
-    if (!program) {
-        SkDebugf("SkSL error:\n%s\n", gpu->shaderCompiler()->errorText().c_str());
-        SkASSERT(false);
+    if (gPrintSKSL || gPrintMSL) {
+        GrShaderUtils::PrintShaderBanner(programKind);
+        if (gPrintSKSL) {
+            SkDebugf("SKSL:\n");
+            GrShaderUtils::PrintLineByLine(GrShaderUtils::PrettyPrint(sksl));
+        }
+        if (gPrintMSL) {
+            SkDebugf("MSL:\n");
+            GrShaderUtils::PrintLineByLine(GrShaderUtils::PrettyPrint(*msl));
+        }
     }
 
     *outInputs = program->fInputs;
-    SkSL::String code;
-    if (!gpu->shaderCompiler()->toMetal(*program, &code)) {
-        SkDebugf("%s\n", gpu->shaderCompiler()->errorText().c_str());
-        SkASSERT(false);
-        return nil;
-    }
-    NSString* mtlCode = [[NSString alloc] initWithCString: code.c_str()
-                                                 encoding: NSASCIIStringEncoding];
-#if PRINT_MSL
-    print_msl([mtlCode cStringUsingEncoding: NSASCIIStringEncoding]);
-#endif
+    return GrCompileMtlShaderLibrary(gpu, *msl, errorHandler);
+}
 
-    MTLCompileOptions* defaultOptions = [[MTLCompileOptions alloc] init];
+id<MTLLibrary> GrCompileMtlShaderLibrary(const GrMtlGpu* gpu,
+                                         const SkSL::String& msl,
+                                         GrContextOptions::ShaderErrorHandler* errorHandler) {
+    auto nsSource = [[NSString alloc] initWithBytesNoCopy:const_cast<char*>(msl.c_str())
+                                                   length:msl.size()
+                                                 encoding:NSUTF8StringEncoding
+                                             freeWhenDone:NO];
     NSError* error = nil;
-    id<MTLLibrary> compiledLibrary = [gpu->device() newLibraryWithSource: mtlCode
-                                                                 options: defaultOptions
-                                                                   error: &error];
-    if (error) {
-        SkDebugf("Error compiling MSL shader: %s\n",
-                 [[error localizedDescription] cStringUsingEncoding: NSASCIIStringEncoding]);
+#if defined(SK_BUILD_FOR_MAC)
+    id<MTLLibrary> compiledLibrary = GrMtlNewLibraryWithSource(gpu->device(), nsSource,
+                                                               nil, &error);
+#else
+    id<MTLLibrary> compiledLibrary = [gpu->device() newLibraryWithSource:nsSource
+                                                                 options:nil
+                                                                   error:&error];
+#endif
+    if (!compiledLibrary) {
+        errorHandler->compileError(msl.c_str(), error.debugDescription.UTF8String);
         return nil;
     }
+
     return compiledLibrary;
 }
 
-id<MTLTexture> GrGetMTLTextureFromSurface(GrSurface* surface, bool doResolve) {
+// Wrapper to get atomic assignment for compiles and pipeline creation
+class MtlCompileResult : public SkRefCnt {
+public:
+    MtlCompileResult() : fCompiledObject(nil), fError(nil) {}
+    void set(id compiledObject, NSError* error) {
+        SkAutoMutexExclusive automutex(fMutex);
+        fCompiledObject = compiledObject;
+        fError = error;
+    }
+    std::pair<id, NSError*> get() {
+        SkAutoMutexExclusive automutex(fMutex);
+        return std::make_pair(fCompiledObject, fError);
+    }
+private:
+    SkMutex fMutex;
+    id fCompiledObject SK_GUARDED_BY(fMutex);
+    NSError* fError SK_GUARDED_BY(fMutex);
+};
+
+id<MTLLibrary> GrMtlNewLibraryWithSource(id<MTLDevice> device, NSString* mslCode,
+                                         MTLCompileOptions* options, NSError** error) {
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    sk_sp<MtlCompileResult> compileResult(new MtlCompileResult);
+    // We have to increment the ref for the Obj-C block manually because it won't do it for us
+    compileResult->ref();
+    MTLNewLibraryCompletionHandler completionHandler =
+            ^(id<MTLLibrary> library, NSError* error) {
+                compileResult->set(library, error);
+                dispatch_semaphore_signal(semaphore);
+                compileResult->unref();
+            };
+
+    [device newLibraryWithSource: mslCode
+                         options: options
+               completionHandler: completionHandler];
+
+    // Wait 300 ms for the compiler
+    constexpr auto kTimeoutNS = 300000000UL;
+    if (dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, kTimeoutNS))) {
+        if (error) {
+            constexpr auto kTimeoutMS = kTimeoutNS/1000000UL;
+            NSString* description =
+                    [NSString stringWithFormat:@"Compilation took longer than %lu ms",
+                                               kTimeoutMS];
+            *error = GrCreateMtlError(description, GrMtlErrorCode::kTimeout);
+        }
+        return nil;
+    }
+
+    id<MTLLibrary> compiledLibrary;
+    std::tie(compiledLibrary, *error) = compileResult->get();
+
+    return compiledLibrary;
+}
+
+id<MTLRenderPipelineState> GrMtlNewRenderPipelineStateWithDescriptor(
+        id<MTLDevice> device, MTLRenderPipelineDescriptor* pipelineDescriptor, NSError** error) {
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    sk_sp<MtlCompileResult> compileResult(new MtlCompileResult);
+    // We have to increment the ref for the Obj-C block manually because it won't do it for us
+    compileResult->ref();
+    MTLNewRenderPipelineStateCompletionHandler completionHandler =
+            ^(id<MTLRenderPipelineState> state, NSError* error) {
+                compileResult->set(state, error);
+                dispatch_semaphore_signal(semaphore);
+                compileResult->unref();
+            };
+
+    [device newRenderPipelineStateWithDescriptor: pipelineDescriptor
+                               completionHandler: completionHandler];
+
+    // Wait 300 ms for pipeline creation
+    constexpr auto kTimeoutNS = 300000000UL;
+    if (dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, kTimeoutNS))) {
+        if (error) {
+            constexpr auto kTimeoutMS = kTimeoutNS/1000000UL;
+            NSString* description =
+                    [NSString stringWithFormat:@"Pipeline creation took longer than %lu ms",
+                                               kTimeoutMS];
+            *error = GrCreateMtlError(description, GrMtlErrorCode::kTimeout);
+        }
+        return nil;
+    }
+
+    id<MTLRenderPipelineState> pipelineState;
+    std::tie(pipelineState, *error) = compileResult->get();
+
+    return pipelineState;
+}
+
+id<MTLTexture> GrGetMTLTextureFromSurface(GrSurface* surface) {
     id<MTLTexture> mtlTexture = nil;
 
     GrMtlRenderTarget* renderTarget = static_cast<GrMtlRenderTarget*>(surface->asRenderTarget());
     GrMtlTexture* texture;
     if (renderTarget) {
-        if (doResolve) {
-            // TODO: do resolve and set mtlTexture to resolved texture. As of now, we shouldn't
-            // have any multisampled render targets.
+        // We should not be using this for multisampled rendertargets with a separate resolve
+        // texture.
+        if (renderTarget->mtlResolveTexture()) {
+            SkASSERT(renderTarget->numSamples() > 1);
             SkASSERT(false);
-        } else {
-            mtlTexture = renderTarget->mtlRenderTexture();
+            return nil;
         }
+        mtlTexture = renderTarget->mtlColorTexture();
     } else {
         texture = static_cast<GrMtlTexture*>(surface->asTexture());
         if (texture) {
@@ -212,7 +231,182 @@ id<MTLTexture> GrGetMTLTextureFromSurface(GrSurface* surface, bool doResolve) {
 // CPP Utils
 
 GrMTLPixelFormat GrGetMTLPixelFormatFromMtlTextureInfo(const GrMtlTextureInfo& info) {
-    id<MTLTexture> mtlTexture = GrGetMTLTexture(info.fTexture,
-                                                GrWrapOwnership::kBorrow_GrWrapOwnership);
+    id<MTLTexture> mtlTexture = GrGetMTLTexture(info.fTexture.get());
     return static_cast<GrMTLPixelFormat>(mtlTexture.pixelFormat);
 }
+
+uint32_t GrMtlFormatChannels(GrMTLPixelFormat mtlFormat) {
+    switch (mtlFormat) {
+        case MTLPixelFormatRGBA8Unorm:      return kRGBA_SkColorChannelFlags;
+        case MTLPixelFormatR8Unorm:         return kRed_SkColorChannelFlag;
+        case MTLPixelFormatA8Unorm:         return kAlpha_SkColorChannelFlag;
+        case MTLPixelFormatBGRA8Unorm:      return kRGBA_SkColorChannelFlags;
+#if defined(SK_BUILD_FOR_IOS) && !TARGET_OS_SIMULATOR
+        case MTLPixelFormatB5G6R5Unorm:     return kRGB_SkColorChannelFlags;
+#endif
+        case MTLPixelFormatRGBA16Float:     return kRGBA_SkColorChannelFlags;
+        case MTLPixelFormatR16Float:        return kRed_SkColorChannelFlag;
+        case MTLPixelFormatRG8Unorm:        return kRG_SkColorChannelFlags;
+        case MTLPixelFormatRGB10A2Unorm:    return kRGBA_SkColorChannelFlags;
+#ifdef SK_BUILD_FOR_MAC
+        case MTLPixelFormatBGR10A2Unorm:    return kRGBA_SkColorChannelFlags;
+#endif
+#if defined(SK_BUILD_FOR_IOS) && !TARGET_OS_SIMULATOR
+        case MTLPixelFormatABGR4Unorm:      return kRGBA_SkColorChannelFlags;
+#endif
+        case MTLPixelFormatRGBA8Unorm_sRGB: return kRGBA_SkColorChannelFlags;
+        case MTLPixelFormatR16Unorm:        return kRed_SkColorChannelFlag;
+        case MTLPixelFormatRG16Unorm:       return kRG_SkColorChannelFlags;
+#ifdef SK_BUILD_FOR_IOS
+        case MTLPixelFormatETC2_RGB8:       return kRGB_SkColorChannelFlags;
+#else
+        case MTLPixelFormatBC1_RGBA:        return kRGBA_SkColorChannelFlags;
+#endif
+        case MTLPixelFormatRGBA16Unorm:     return kRGBA_SkColorChannelFlags;
+        case MTLPixelFormatRG16Float:       return kRG_SkColorChannelFlags;
+        case MTLPixelFormatStencil8:        return 0;
+
+        default:                            return 0;
+    }
+}
+
+SkImage::CompressionType GrMtlBackendFormatToCompressionType(const GrBackendFormat& format) {
+    MTLPixelFormat mtlFormat = GrBackendFormatAsMTLPixelFormat(format);
+    return GrMtlFormatToCompressionType(mtlFormat);
+}
+
+bool GrMtlFormatIsCompressed(MTLPixelFormat mtlFormat) {
+    switch (mtlFormat) {
+#ifdef SK_BUILD_FOR_IOS
+        case MTLPixelFormatETC2_RGB8:
+            return true;
+#else
+        case MTLPixelFormatBC1_RGBA:
+            return true;
+#endif
+        default:
+            return false;
+    }
+}
+
+SkImage::CompressionType GrMtlFormatToCompressionType(MTLPixelFormat mtlFormat) {
+    switch (mtlFormat) {
+#ifdef SK_BUILD_FOR_IOS
+        case MTLPixelFormatETC2_RGB8: return SkImage::CompressionType::kETC2_RGB8_UNORM;
+#else
+        case MTLPixelFormatBC1_RGBA:  return SkImage::CompressionType::kBC1_RGBA8_UNORM;
+#endif
+        default:                      return SkImage::CompressionType::kNone;
+    }
+
+    SkUNREACHABLE;
+}
+
+int GrMtlTextureInfoSampleCount(const GrMtlTextureInfo& info) {
+    id<MTLTexture> texture = GrGetMTLTexture(info.fTexture.get());
+    if (!texture) {
+        return 0;
+    }
+    return texture.sampleCount;
+}
+
+size_t GrMtlBackendFormatBytesPerBlock(const GrBackendFormat& format) {
+    MTLPixelFormat mtlFormat = GrBackendFormatAsMTLPixelFormat(format);
+    return GrMtlFormatBytesPerBlock(mtlFormat);
+}
+
+size_t GrMtlFormatBytesPerBlock(MTLPixelFormat mtlFormat) {
+    switch (mtlFormat) {
+        case MTLPixelFormatInvalid:         return 0;
+        case MTLPixelFormatRGBA8Unorm:      return 4;
+        case MTLPixelFormatR8Unorm:         return 1;
+        case MTLPixelFormatA8Unorm:         return 1;
+        case MTLPixelFormatBGRA8Unorm:      return 4;
+#ifdef SK_BUILD_FOR_IOS
+        case MTLPixelFormatB5G6R5Unorm:     return 2;
+#endif
+        case MTLPixelFormatRGBA16Float:     return 8;
+        case MTLPixelFormatR16Float:        return 2;
+        case MTLPixelFormatRG8Unorm:        return 2;
+        case MTLPixelFormatRGB10A2Unorm:    return 4;
+#ifdef SK_BUILD_FOR_MAC
+        case MTLPixelFormatBGR10A2Unorm:    return 4;
+#endif
+#ifdef SK_BUILD_FOR_IOS
+        case MTLPixelFormatABGR4Unorm:      return 2;
+#endif
+        case MTLPixelFormatRGBA8Unorm_sRGB: return 4;
+        case MTLPixelFormatR16Unorm:        return 2;
+        case MTLPixelFormatRG16Unorm:       return 4;
+#ifdef SK_BUILD_FOR_IOS
+        case MTLPixelFormatETC2_RGB8:       return 8;
+#else
+        case MTLPixelFormatBC1_RGBA:        return 8;
+#endif
+        case MTLPixelFormatRGBA16Unorm:     return 8;
+        case MTLPixelFormatRG16Float:       return 4;
+        case MTLPixelFormatStencil8:        return 1;
+
+        default:                            return 0;
+    }
+}
+
+int GrMtlBackendFormatStencilBits(const GrBackendFormat& format) {
+    MTLPixelFormat mtlFormat = GrBackendFormatAsMTLPixelFormat(format);
+    return GrMtlFormatStencilBits(mtlFormat);
+}
+
+int GrMtlFormatStencilBits(MTLPixelFormat mtlFormat) {
+    switch(mtlFormat) {
+     case MTLPixelFormatStencil8:
+         return 8;
+     default:
+         return 0;
+    }
+}
+
+#if defined(SK_DEBUG) || GR_TEST_UTILS
+bool GrMtlFormatIsBGRA8(GrMTLPixelFormat mtlFormat) {
+    return mtlFormat == MTLPixelFormatBGRA8Unorm;
+}
+
+const char* GrMtlFormatToStr(GrMTLPixelFormat mtlFormat) {
+    switch (mtlFormat) {
+        case MTLPixelFormatInvalid:         return "Invalid";
+        case MTLPixelFormatRGBA8Unorm:      return "RGBA8Unorm";
+        case MTLPixelFormatR8Unorm:         return "R8Unorm";
+        case MTLPixelFormatA8Unorm:         return "A8Unorm";
+        case MTLPixelFormatBGRA8Unorm:      return "BGRA8Unorm";
+#ifdef SK_BUILD_FOR_IOS
+        case MTLPixelFormatB5G6R5Unorm:     return "B5G6R5Unorm";
+#endif
+        case MTLPixelFormatRGBA16Float:     return "RGBA16Float";
+        case MTLPixelFormatR16Float:        return "R16Float";
+        case MTLPixelFormatRG8Unorm:        return "RG8Unorm";
+        case MTLPixelFormatRGB10A2Unorm:    return "RGB10A2Unorm";
+#ifdef SK_BUILD_FOR_MAC
+        case MTLPixelFormatBGR10A2Unorm:    return "BGR10A2Unorm";
+#endif
+#ifdef SK_BUILD_FOR_IOS
+        case MTLPixelFormatABGR4Unorm:      return "ABGR4Unorm";
+#endif
+        case MTLPixelFormatRGBA8Unorm_sRGB: return "RGBA8Unorm_sRGB";
+        case MTLPixelFormatR16Unorm:        return "R16Unorm";
+        case MTLPixelFormatRG16Unorm:       return "RG16Unorm";
+#ifdef SK_BUILD_FOR_IOS
+        case MTLPixelFormatETC2_RGB8:       return "ETC2_RGB8";
+#else
+        case MTLPixelFormatBC1_RGBA:        return "BC1_RGBA";
+#endif
+        case MTLPixelFormatRGBA16Unorm:     return "RGBA16Unorm";
+        case MTLPixelFormatRG16Float:       return "RG16Float";
+        case MTLPixelFormatStencil8:        return "Stencil8";
+
+        default:                            return "Unknown";
+    }
+}
+
+#endif
+
+
+

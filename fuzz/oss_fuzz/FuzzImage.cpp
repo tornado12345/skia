@@ -5,11 +5,11 @@
  * found in the LICENSE file.
  */
 
-#include "SkImage.h"
-#include "SkPaint.h"
-#include "SkCanvas.h"
-#include "SkData.h"
-#include "SkSurface.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkData.h"
+#include "include/core/SkImage.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkSurface.h"
 
 bool FuzzImageDecode(sk_sp<SkData> bytes) {
     auto img = SkImage::MakeFromEncoded(bytes);
@@ -28,8 +28,12 @@ bool FuzzImageDecode(sk_sp<SkData> bytes) {
     return true;
 }
 
-#if defined(IS_FUZZING_WITH_LIBFUZZER)
+// TODO(kjlubick): remove IS_FUZZING... after https://crrev.com/c/2410304 lands
+#if defined(SK_BUILD_FOR_LIBFUZZER) || defined(IS_FUZZING_WITH_LIBFUZZER)
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    if (size > 10240) {
+        return 0;
+    }
     auto bytes = SkData::MakeWithoutCopy(data, size);
     FuzzImageDecode(bytes);
     return 0;

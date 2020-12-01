@@ -4,22 +4,21 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
-#include "SkArenaAlloc.h"
-#include "SkBlendModePriv.h"
-#include "SkBlurDrawLooper.h"
-#include "SkColorSpacePriv.h"
-#include "SkMaskFilter.h"
-#include "SkCanvas.h"
-#include "SkColorSpaceXformer.h"
-#include "SkColor.h"
-#include "SkMaskFilterBase.h"
-#include "SkReadBuffer.h"
-#include "SkWriteBuffer.h"
-#include "SkLayerDrawLooper.h"
-#include "SkString.h"
-#include "SkStringUtils.h"
-#include "SkUnPreMultiply.h"
-#include "SkXfermodePriv.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkMaskFilter.h"
+#include "include/core/SkString.h"
+#include "include/core/SkUnPreMultiply.h"
+#include "include/effects/SkBlurDrawLooper.h"
+#include "include/effects/SkLayerDrawLooper.h"
+#include "src/core/SkArenaAlloc.h"
+#include "src/core/SkBlendModePriv.h"
+#include "src/core/SkColorSpacePriv.h"
+#include "src/core/SkMaskFilterBase.h"
+#include "src/core/SkReadBuffer.h"
+#include "src/core/SkStringUtils.h"
+#include "src/core/SkWriteBuffer.h"
+#include "src/core/SkXfermodePriv.h"
 
 SkLayerDrawLooper::LayerInfo::LayerInfo() {
     fPaintBits = 0;                     // ignore our paint fields
@@ -43,8 +42,7 @@ SkLayerDrawLooper::~SkLayerDrawLooper() {
 }
 
 SkLayerDrawLooper::Context*
-SkLayerDrawLooper::makeContext(SkCanvas* canvas, SkArenaAlloc* alloc) const {
-    canvas->save();
+SkLayerDrawLooper::makeContext(SkArenaAlloc* alloc) const {
     return alloc->make<LayerDrawLooperContext>(this);
 }
 
@@ -62,7 +60,7 @@ static SkColor4f xferColor(const SkColor4f& src, const SkColor4f& dst, SkBlendMo
     }
 }
 
-// Even with kEntirePaint_Bits, we always ensure that the master paint's
+// Even with kEntirePaint_Bits, we always ensure that the base paint's
 // text-encoding is respected, since that controls how we interpret the
 // text/length parameters of a draw[Pos]Text call.
 void SkLayerDrawLooper::LayerDrawLooperContext::ApplyInfo(
@@ -131,35 +129,21 @@ void SkLayerDrawLooper::LayerDrawLooperContext::ApplyInfo(
 #endif
 }
 
-// Should we add this to canvas?
-static void postTranslate(SkCanvas* canvas, SkScalar dx, SkScalar dy) {
-    SkMatrix m = canvas->getTotalMatrix();
-    m.postTranslate(dx, dy);
-    canvas->setMatrix(m);
-}
-
 SkLayerDrawLooper::LayerDrawLooperContext::LayerDrawLooperContext(
         const SkLayerDrawLooper* looper) : fCurrRec(looper->fRecs) {}
 
-bool SkLayerDrawLooper::LayerDrawLooperContext::next(SkCanvas* canvas,
-                                                     SkPaint* paint) {
-    canvas->restore();
+bool SkLayerDrawLooper::LayerDrawLooperContext::next(Info* info, SkPaint* paint) {
     if (nullptr == fCurrRec) {
         return false;
     }
 
     ApplyInfo(paint, fCurrRec->fPaint, fCurrRec->fInfo);
 
-    canvas->save();
-    if (fCurrRec->fInfo.fPostTranslate) {
-        postTranslate(canvas, fCurrRec->fInfo.fOffset.fX,
-                      fCurrRec->fInfo.fOffset.fY);
-    } else {
-        canvas->translate(fCurrRec->fInfo.fOffset.fX,
-                          fCurrRec->fInfo.fOffset.fY);
+    if (info) {
+        info->fTranslate = fCurrRec->fInfo.fOffset;
+        info->fApplyPostCTM = fCurrRec->fInfo.fPostTranslate;
     }
     fCurrRec = fCurrRec->fNext;
-
     return true;
 }
 
@@ -207,37 +191,6 @@ bool SkLayerDrawLooper::asABlurShadow(BlurShadowRec* bsRec) const {
     return true;
 }
 
-sk_sp<SkDrawLooper> SkLayerDrawLooper::onMakeColorSpace(SkColorSpaceXformer* xformer) const {
-    if (!fCount) {
-        return sk_ref_sp(const_cast<SkLayerDrawLooper*>(this));
-    }
-
-    auto looper = sk_sp<SkLayerDrawLooper>(new SkLayerDrawLooper());
-    looper->fCount = fCount;
-
-    Rec* oldRec = fRecs;
-    Rec* newTopRec = new Rec();
-    newTopRec->fInfo = oldRec->fInfo;
-    newTopRec->fPaint = xformer->apply(oldRec->fPaint);
-    newTopRec->fNext = nullptr;
-
-    Rec* prevNewRec = newTopRec;
-    oldRec = oldRec->fNext;
-    while (oldRec) {
-        Rec* newRec = new Rec();
-        newRec->fInfo = oldRec->fInfo;
-        newRec->fPaint = xformer->apply(oldRec->fPaint);
-        newRec->fNext = nullptr;
-        prevNewRec->fNext = newRec;
-
-        prevNewRec = newRec;
-        oldRec = oldRec->fNext;
-    }
-
-    looper->fRecs = newTopRec;
-    return std::move(looper);
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 void SkLayerDrawLooper::flatten(SkWriteBuffer& buffer) const {
@@ -260,6 +213,11 @@ void SkLayerDrawLooper::flatten(SkWriteBuffer& buffer) const {
 sk_sp<SkFlattenable> SkLayerDrawLooper::CreateProc(SkReadBuffer& buffer) {
     int count = buffer.readInt();
 
+#if defined(SK_BUILD_FOR_FUZZER)
+    if (count > 100) {
+        count = 100;
+    }
+#endif
     Builder builder;
     for (int i = 0; i < count; i++) {
         LayerInfo info;

@@ -8,10 +8,10 @@
 #ifndef Sk2DPathEffect_DEFINED
 #define Sk2DPathEffect_DEFINED
 
-#include "SkFlattenable.h"
-#include "SkPath.h"
-#include "SkPathEffect.h"
-#include "SkMatrix.h"
+#include "include/core/SkFlattenable.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkPath.h"
+#include "include/core/SkPathEffect.h"
 
 class SK_API Sk2DPathEffect : public SkPathEffect {
 protected:
@@ -47,7 +47,7 @@ private:
     Sk2DPathEffect& operator=(const Sk2DPathEffect&);
 
     friend class Sk2DPathEffectBlitter;
-    typedef SkPathEffect INHERITED;
+    using INHERITED = SkPathEffect;
 };
 
 class SK_API SkLine2DPathEffect : public Sk2DPathEffect {
@@ -75,7 +75,7 @@ private:
 
     SkScalar fWidth;
 
-    typedef Sk2DPathEffect INHERITED;
+    using INHERITED = Sk2DPathEffect;
 };
 
 class SK_API SkPath2DPathEffect : public Sk2DPathEffect {
@@ -99,7 +99,7 @@ private:
 
     SkPath  fPath;
 
-    typedef Sk2DPathEffect INHERITED;
+    using INHERITED = Sk2DPathEffect;
 };
 
 #endif

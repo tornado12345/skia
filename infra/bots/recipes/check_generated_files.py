@@ -7,6 +7,7 @@
 
 DEPS = [
   'build',
+  'infra',
   'recipe_engine/context',
   'recipe_engine/file',
   'recipe_engine/path',
@@ -15,7 +16,6 @@ DEPS = [
   'recipe_engine/raw_io',
   'recipe_engine/step',
   'checkout',
-  'flavor',
   'run',
   'vars',
 ]
@@ -27,7 +27,6 @@ def RunSteps(api):
   checkout_root = api.checkout.default_checkout_root
   api.checkout.bot_update(checkout_root=checkout_root)
   api.file.ensure_directory('makedirs tmp_dir', api.vars.tmp_dir)
-  api.flavor.setup()
 
   cwd = api.path['checkout']
 
@@ -39,6 +38,10 @@ def RunSteps(api):
         'git diff #1',
         cmd=['git', 'diff', '--no-ext-diff'],
         stdout=api.m.raw_io.output()).stdout
+
+    with api.context(env=api.infra.go_env):
+      api.step('generate gl interfaces',
+               cmd=['make', '-C', 'tools/gpu/gl/interface', 'generate'])
 
     # Touch all .fp files so that the generated files are rebuilt.
     api.run(
@@ -55,7 +58,7 @@ for r, d, files in os.walk('%s'):
       subprocess.check_call(['touch', path])
 """ % cwd)
 
-    # Regenerate the SKSL files.
+    # Run GN, regenerate the SKSL files, and make sure rewritten #includes work.
     api.build(checkout_root=checkout_root,
               out_dir=api.vars.build_dir.join('out', 'Release'))
 

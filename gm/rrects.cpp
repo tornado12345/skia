@@ -5,14 +5,31 @@
  * found in the LICENSE file.
  */
 
-#include "gm.h"
-#include "GrCaps.h"
-#include "GrContext.h"
-#include "GrRenderTargetContextPriv.h"
-#include "effects/GrRRectEffect.h"
-#include "ops/GrDrawOp.h"
-#include "ops/GrFillRectOp.h"
-#include "SkRRect.h"
+#include "gm/gm.h"
+#include "include/core/SkBlendMode.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkMatrix.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkPoint.h"
+#include "include/core/SkRRect.h"
+#include "include/core/SkRect.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/core/SkTypes.h"
+#include "include/private/GrSharedEnums.h"
+#include "include/private/GrTypesPriv.h"
+#include "src/gpu/GrCaps.h"
+#include "src/gpu/GrFragmentProcessor.h"
+#include "src/gpu/GrPaint.h"
+#include "src/gpu/GrRenderTargetContext.h"
+#include "src/gpu/effects/GrPorterDuffXferProcessor.h"
+#include "src/gpu/effects/GrRRectEffect.h"
+#include "src/gpu/ops/GrDrawOp.h"
+#include "src/gpu/ops/GrFillRectOp.h"
+
+#include <memory>
+#include <utility>
 
 namespace skiagm {
 
@@ -63,7 +80,7 @@ protected:
     DrawResult onDraw(SkCanvas* canvas, SkString* errorMsg) override {
         GrRenderTargetContext* renderTargetContext =
             canvas->internal_private_accessTopLayerRenderTargetContext();
-        GrContext* context = canvas->getGrContext();
+        auto context = canvas->recordingContext();
         if (kEffect_Type == fType && (!renderTargetContext || !context)) {
             *errorMsg = kErrorMsg_DrawSkippedGpuOnly;
             return DrawResult::kSkip;
@@ -101,19 +118,19 @@ protected:
                         rrect.offset(SkIntToScalar(x), SkIntToScalar(y));
                         GrClipEdgeType edgeType = (GrClipEdgeType) et;
                         const auto& caps = *renderTargetContext->caps()->shaderCaps();
-                        auto fp = GrRRectEffect::Make(edgeType, rrect, caps);
-                        if (fp) {
+                        auto [success, fp] = GrRRectEffect::Make(/*inputFP=*/nullptr,
+                                                                 edgeType, rrect, caps);
+                        if (success) {
                             GrPaint grPaint;
                             grPaint.setXPFactory(GrPorterDuffXPFactory::Get(SkBlendMode::kSrc));
-                            grPaint.addCoverageFragmentProcessor(std::move(fp));
+                            grPaint.setCoverageFragmentProcessor(std::move(fp));
                             grPaint.setColor4f({ 0, 0, 0, 1.f });
 
                             SkRect bounds = rrect.getBounds();
                             bounds.outset(2.f, 2.f);
 
-                            renderTargetContext->priv().testingOnly_addDrawOp(
-                                    GrFillRectOp::Make(context, std::move(grPaint), GrAAType::kNone,
-                                                       SkMatrix::I(), bounds));
+                            renderTargetContext->addDrawOp(GrFillRectOp::MakeNonAARect(
+                                    context, std::move(grPaint), SkMatrix::I(), bounds));
                         } else {
                             drew = false;
                         }
@@ -177,7 +194,7 @@ private:
     static constexpr int kNumRRects = kNumSimpleCases + kNumComplexCases;
     SkRRect fRRects[kNumRRects];
 
-    typedef GM INHERITED;
+    using INHERITED = GM;
 };
 
 // Radii for the various test cases. Order is UL, UR, LR, LL
@@ -251,4 +268,4 @@ DEF_GM( return new RRectGM(RRectGM::kAA_Clip_Type); )
 DEF_GM( return new RRectGM(RRectGM::kBW_Clip_Type); )
 DEF_GM( return new RRectGM(RRectGM::kEffect_Type); )
 
-}
+}  // namespace skiagm

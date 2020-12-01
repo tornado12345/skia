@@ -24,8 +24,7 @@ INNER_TEST_SCRIPT = '/SRC/skia/infra/skqp/run_skqp.sh'
 
 def RunSteps(api):
   api.vars.setup()
-  checkout_root = api.checkout.default_checkout_root
-  api.checkout.bot_update(checkout_root=checkout_root)
+  checkout_root = api.path['start_dir']
 
   # This is where the APK should be, that is, where Swarming puts the inputs.
   apk_location = api.vars.build_dir
@@ -93,9 +92,9 @@ sys.exit(1)
 
 def GenTests(api):
   yield (
-      api.test('Test-Debian9-Clang-GCE-CPU-Emulator-x86-devrel'
+      api.test('Test-Debian10-Clang-GCE-CPU-Emulator-x86-devrel'
                '-All-Android_SKQP') +
-      api.properties(buildername=('Test-Debian9-Clang-GCE-CPU-Emulator'
+      api.properties(buildername=('Test-Debian10-Clang-GCE-CPU-Emulator'
                                   '-x86-devrel-All-Android_SKQP'),
                      repository='https://skia.googlesource.com/skia.git',
                      revision='abc123',

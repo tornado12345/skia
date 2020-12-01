@@ -5,28 +5,30 @@
  * found in the LICENSE file.
  */
 
-#include "GrAAHairLinePathRenderer.h"
-#include "GrBuffer.h"
-#include "GrCaps.h"
-#include "GrClip.h"
-#include "GrDefaultGeoProcFactory.h"
-#include "GrDrawOpTest.h"
-#include "GrOpFlushState.h"
-#include "GrPathUtils.h"
-#include "GrProcessor.h"
-#include "GrResourceProvider.h"
-#include "GrShape.h"
-#include "GrSimpleMeshDrawOpHelper.h"
-#include "GrStyle.h"
-#include "SkGeometry.h"
-#include "SkMatrixPriv.h"
-#include "SkPoint3.h"
-#include "SkPointPriv.h"
-#include "SkRectPriv.h"
-#include "SkStroke.h"
-#include "SkTemplates.h"
-#include "effects/GrBezierEffect.h"
-#include "ops/GrMeshDrawOp.h"
+#include "include/core/SkPoint3.h"
+#include "include/private/SkTemplates.h"
+#include "src/core/SkGeometry.h"
+#include "src/core/SkMatrixPriv.h"
+#include "src/core/SkPointPriv.h"
+#include "src/core/SkRectPriv.h"
+#include "src/core/SkStroke.h"
+#include "src/gpu/GrAuditTrail.h"
+#include "src/gpu/GrBuffer.h"
+#include "src/gpu/GrCaps.h"
+#include "src/gpu/GrDefaultGeoProcFactory.h"
+#include "src/gpu/GrDrawOpTest.h"
+#include "src/gpu/GrOpFlushState.h"
+#include "src/gpu/GrProcessor.h"
+#include "src/gpu/GrProgramInfo.h"
+#include "src/gpu/GrRenderTargetContext.h"
+#include "src/gpu/GrResourceProvider.h"
+#include "src/gpu/GrStyle.h"
+#include "src/gpu/effects/GrBezierEffect.h"
+#include "src/gpu/geometry/GrPathUtils.h"
+#include "src/gpu/geometry/GrStyledShape.h"
+#include "src/gpu/ops/GrAAHairLinePathRenderer.h"
+#include "src/gpu/ops/GrMeshDrawOp.h"
+#include "src/gpu/ops/GrSimpleMeshDrawOpHelperWithStencil.h"
 
 #define PREALLOC_PTARRAY(N) SkSTArray<(N),SkPoint, true>
 
@@ -110,7 +112,7 @@ static sk_sp<const GrBuffer> get_lines_index_buffer(GrResourceProvider* resource
 
 // Takes 178th time of logf on Z600 / VC2010
 static int get_float_exp(float x) {
-    GR_STATIC_ASSERT(sizeof(int) == sizeof(float));
+    static_assert(sizeof(int) == sizeof(float));
 #ifdef SK_DEBUG
     static bool tested;
     if (!tested) {
@@ -225,7 +227,7 @@ static int num_quad_subdivs(const SkPoint p[3]) {
 
         // +1 since we're ignoring the mantissa contribution.
         int log = get_float_exp(dsqd/(gSubdivTol*gSubdivTol)) + 1;
-        log = SkTMin(SkTMax(0, log), kMaxSub);
+        log = std::min(std::max(0, log), kMaxSub);
         return log;
     }
 }
@@ -311,7 +313,7 @@ static int gather_lines_and_quads(const SkPath& path,
 
     for (;;) {
         SkPoint pathPts[4];
-        SkPath::Verb verb = iter.next(pathPts, false);
+        SkPath::Verb verb = iter.next(pathPts);
         switch (verb) {
             case SkPath::kConic_Verb:
                 if (convertConicsToQuads) {
@@ -486,7 +488,7 @@ struct BezierVertex {
     };
 };
 
-GR_STATIC_ASSERT(sizeof(BezierVertex) == 3 * sizeof(SkPoint));
+static_assert(sizeof(BezierVertex) == 3 * sizeof(SkPoint));
 
 static void intersect_lines(const SkPoint& ptA, const SkVector& normA,
                             const SkPoint& ptB, const SkVector& normB,
@@ -633,16 +635,36 @@ static void add_quads(const SkPoint p[3],
                       const SkMatrix* toSrc,
                       BezierVertex** vert) {
     SkASSERT(subdiv >= 0);
-    if (subdiv) {
-        SkPoint newP[5];
-        SkChopQuadAtHalf(p, newP);
-        add_quads(newP + 0, subdiv-1, toDevice, toSrc, vert);
-        add_quads(newP + 2, subdiv-1, toDevice, toSrc, vert);
-    } else {
-        bloat_quad(p, toDevice, toSrc, *vert);
-        set_uv_quad(p, *vert);
+    // temporary vertex storage to avoid reading the vertex buffer
+    BezierVertex outVerts[kQuadNumVertices] = {};
+
+    // storage for the chopped quad
+    // pts 0,1,2 are the first quad, and 2,3,4 the second quad
+    SkPoint choppedQuadPts[5];
+    // start off with our original curve in the second quad slot
+    memcpy(&choppedQuadPts[2], p, 3*sizeof(SkPoint));
+
+    int stepCount = 1 << subdiv;
+    while (stepCount > 1) {
+        // The general idea is:
+        // * chop the quad using pts 2,3,4 as the input
+        // * write out verts using pts 0,1,2
+        // * now 2,3,4 is the remainder of the curve, chop again until all subdivisions are done
+        SkScalar h = 1.f / stepCount;
+        SkChopQuadAt(&choppedQuadPts[2], choppedQuadPts, h);
+
+        bloat_quad(choppedQuadPts, toDevice, toSrc, outVerts);
+        set_uv_quad(choppedQuadPts, outVerts);
+        memcpy(*vert, outVerts, kQuadNumVertices*sizeof(BezierVertex));
         *vert += kQuadNumVertices;
+        --stepCount;
     }
+
+    // finish up, write out the final quad
+    bloat_quad(&choppedQuadPts[2], toDevice, toSrc, outVerts);
+    set_uv_quad(&choppedQuadPts[2], outVerts);
+    memcpy(*vert, outVerts, kQuadNumVertices * sizeof(BezierVertex));
+    *vert += kQuadNumVertices;
 }
 
 static void add_line(const SkPoint p[2],
@@ -758,7 +780,7 @@ bool check_bounds(const SkMatrix& viewMatrix, const SkRect& devBounds, void* ver
         }
         viewMatrix.mapPoints(&pos, 1);
         if (first) {
-            actualBounds.set(pos.fX, pos.fY, pos.fX, pos.fY);
+            actualBounds.setLTRB(pos.fX, pos.fY, pos.fX, pos.fY);
             first = false;
         } else {
             SkRectPriv::GrowToInclude(&actualBounds, pos);
@@ -771,8 +793,6 @@ bool check_bounds(const SkMatrix& viewMatrix, const SkRect& devBounds, void* ver
     return true;
 }
 
-namespace {
-
 class AAHairlineOp final : public GrMeshDrawOp {
 private:
     using Helper = GrSimpleMeshDrawOpHelperWithStencil;
@@ -780,13 +800,13 @@ private:
 public:
     DEFINE_OP_CLASS_ID
 
-    static std::unique_ptr<GrDrawOp> Make(GrRecordingContext* context,
-                                          GrPaint&& paint,
-                                          const SkMatrix& viewMatrix,
-                                          const SkPath& path,
-                                          const GrStyle& style,
-                                          const SkIRect& devClipBounds,
-                                          const GrUserStencilSettings* stencilSettings) {
+    static GrOp::Owner Make(GrRecordingContext* context,
+                            GrPaint&& paint,
+                            const SkMatrix& viewMatrix,
+                            const SkPath& path,
+                            const GrStyle& style,
+                            const SkIRect& devClipBounds,
+                            const GrUserStencilSettings* stencilSettings) {
         SkScalar hairlineCoverage;
         uint8_t newCoverage = 0xff;
         if (GrPathRenderer::IsStrokeHairlineOrEquivalent(style, viewMatrix, &hairlineCoverage)) {
@@ -801,7 +821,7 @@ public:
                                                    devClipBounds, capLength, stencilSettings);
     }
 
-    AAHairlineOp(const Helper::MakeArgs& helperArgs,
+    AAHairlineOp(GrProcessorSet* processorSet,
                  const SkPMColor4f& color,
                  uint8_t coverage,
                  const SkMatrix& viewMatrix,
@@ -810,41 +830,94 @@ public:
                  SkScalar capLength,
                  const GrUserStencilSettings* stencilSettings)
             : INHERITED(ClassID())
-            , fHelper(helperArgs, GrAAType::kCoverage, stencilSettings)
+            , fHelper(processorSet, GrAAType::kCoverage, stencilSettings)
             , fColor(color)
             , fCoverage(coverage) {
         fPaths.emplace_back(PathData{viewMatrix, path, devClipBounds, capLength});
 
         this->setTransformedBounds(path.getBounds(), viewMatrix, HasAABloat::kYes,
-                                   IsZeroArea::kYes);
+                                   IsHairline::kYes);
     }
 
     const char* name() const override { return "AAHairlineOp"; }
 
-    void visitProxies(const VisitProxyFunc& func, VisitorType) const override {
-        fHelper.visitProxies(func);
-    }
+    void visitProxies(const VisitProxyFunc& func) const override {
 
-#ifdef SK_DEBUG
-    SkString dumpInfo() const override {
-        SkString string;
-        string.appendf("Color: 0x%08x Coverage: 0x%02x, Count: %d\n", fColor.toBytes_RGBA(),
-                       fCoverage, fPaths.count());
-        string += INHERITED::dumpInfo();
-        string += fHelper.dumpInfo();
-        return string;
+        bool visited = false;
+        for (int i = 0; i < 3; ++i) {
+            if (fProgramInfos[i]) {
+                fProgramInfos[i]->visitFPProxies(func);
+                visited = true;
+            }
+        }
+
+        if (!visited) {
+            fHelper.visitProxies(func);
+        }
     }
-#endif
 
     FixedFunctionFlags fixedFunctionFlags() const override { return fHelper.fixedFunctionFlags(); }
 
     GrProcessorSet::Analysis finalize(
-            const GrCaps& caps, const GrAppliedClip* clip, GrFSAAType fsaaType) override {
-        return fHelper.finalizeProcessors(
-                caps, clip, fsaaType, GrProcessorAnalysisCoverage::kSingleChannel, &fColor);
+            const GrCaps& caps, const GrAppliedClip* clip, bool hasMixedSampledCoverage,
+            GrClampType clampType) override {
+        // This Op uses uniform (not vertex) color, so doesn't need to track wide color.
+        return fHelper.finalizeProcessors(caps, clip, hasMixedSampledCoverage, clampType,
+                                          GrProcessorAnalysisCoverage::kSingleChannel, &fColor,
+                                          nullptr);
     }
 
+    enum Program : uint8_t {
+        kNone_Program  = 0x0,
+        kLine_Program  = 0x1,
+        kQuad_Program  = 0x2,
+        kConic_Program = 0x4,
+    };
+
 private:
+    void makeLineProgramInfo(const GrCaps&, SkArenaAlloc*, const GrPipeline*,
+                             const GrSurfaceProxyView& writeView,
+                             const SkMatrix* geometryProcessorViewM,
+                             const SkMatrix* geometryProcessorLocalM,
+                             GrXferBarrierFlags renderPassXferBarriers,
+                             GrLoadOp colorLoadOp);
+    void makeQuadProgramInfo(const GrCaps&, SkArenaAlloc*, const GrPipeline*,
+                             const GrSurfaceProxyView& writeView,
+                             const SkMatrix* geometryProcessorViewM,
+                             const SkMatrix* geometryProcessorLocalM,
+                             GrXferBarrierFlags renderPassXferBarriers,
+                             GrLoadOp colorLoadOp);
+    void makeConicProgramInfo(const GrCaps&, SkArenaAlloc*, const GrPipeline*,
+                              const GrSurfaceProxyView& writeView,
+                              const SkMatrix* geometryProcessorViewM,
+                              const SkMatrix* geometryProcessorLocalM,
+                              GrXferBarrierFlags renderPassXferBarriers,
+                              GrLoadOp colorLoadOp);
+
+    GrProgramInfo* programInfo() override {
+        // This Op has 3 programInfos and implements its own onPrePrepareDraws so this entry point
+        // should really never be called.
+        SkASSERT(0);
+        return nullptr;
+    }
+
+    Program predictPrograms(const GrCaps*) const;
+
+    void onCreateProgramInfo(const GrCaps*,
+                             SkArenaAlloc*,
+                             const GrSurfaceProxyView& writeView,
+                             GrAppliedClip&&,
+                             const GrXferProcessor::DstProxyView&,
+                             GrXferBarrierFlags renderPassXferBarriers,
+                             GrLoadOp colorLoadOp) override;
+
+    void onPrePrepareDraws(GrRecordingContext*,
+                           const GrSurfaceProxyView& writeView,
+                           GrAppliedClip*,
+                           const GrXferProcessor::DstProxyView&,
+                           GrXferBarrierFlags renderPassXferBarriers,
+                           GrLoadOp colorLoadOp) override;
+
     void onPrepareDraws(Target*) override;
     void onExecute(GrOpFlushState*, const SkRect& chainBounds) override;
 
@@ -852,7 +925,7 @@ private:
     typedef SkTArray<int, true> IntArray;
     typedef SkTArray<float, true> FloatArray;
 
-    CombineResult onCombineIfPossible(GrOp* t, const GrCaps& caps) override {
+    CombineResult onCombineIfPossible(GrOp* t, SkArenaAlloc*, const GrCaps& caps) override {
         AAHairlineOp* that = t->cast<AAHairlineOp>();
 
         if (!fHelper.isCompatible(that->fHelper, caps, this->bounds(), that->bounds())) {
@@ -865,7 +938,7 @@ private:
 
         // We go to identity if we don't have perspective
         if (this->viewMatrix().hasPerspective() &&
-            !this->viewMatrix().cheapEqualTo(that->viewMatrix())) {
+            !SkMatrixPriv::CheapEqual(this->viewMatrix(), that->viewMatrix())) {
             return CombineResult::kCannotCombine;
         }
 
@@ -880,13 +953,22 @@ private:
             return CombineResult::kCannotCombine;
         }
 
-        if (fHelper.usesLocalCoords() && !this->viewMatrix().cheapEqualTo(that->viewMatrix())) {
+        if (fHelper.usesLocalCoords() && !SkMatrixPriv::CheapEqual(this->viewMatrix(),
+                                                                   that->viewMatrix())) {
             return CombineResult::kCannotCombine;
         }
 
         fPaths.push_back_n(that->fPaths.count(), that->fPaths.begin());
         return CombineResult::kMerged;
     }
+
+#if GR_TEST_UTILS
+    SkString onDumpInfo() const override {
+        return SkStringPrintf("Color: 0x%08x Coverage: 0x%02x, Count: %d\n%s",
+                              fColor.toBytes_RGBA(), fCoverage, fPaths.count(),
+                              fHelper.dumpInfo().c_str());
+    }
+#endif
 
     const SkPMColor4f& color() const { return fColor; }
     uint8_t coverage() const { return fCoverage; }
@@ -904,12 +986,131 @@ private:
     SkPMColor4f fColor;
     uint8_t fCoverage;
 
-    typedef GrMeshDrawOp INHERITED;
+    Program        fCharacterization = kNone_Program;       // holds a mask of required programs
+    GrSimpleMesh*  fMeshes[3] = { nullptr };
+    GrProgramInfo* fProgramInfos[3] = { nullptr };
+
+    using INHERITED = GrMeshDrawOp;
 };
 
-}  // anonymous namespace
+GR_MAKE_BITFIELD_OPS(AAHairlineOp::Program)
 
-void AAHairlineOp::onPrepareDraws(Target* target) {
+void AAHairlineOp::makeLineProgramInfo(const GrCaps& caps, SkArenaAlloc* arena,
+                                       const GrPipeline* pipeline,
+                                       const GrSurfaceProxyView& writeView,
+                                       const SkMatrix* geometryProcessorViewM,
+                                       const SkMatrix* geometryProcessorLocalM,
+                                       GrXferBarrierFlags renderPassXferBarriers,
+                                       GrLoadOp colorLoadOp) {
+    if (fProgramInfos[0]) {
+        return;
+    }
+
+    GrGeometryProcessor* lineGP;
+    {
+        using namespace GrDefaultGeoProcFactory;
+
+        Color color(this->color());
+        LocalCoords localCoords(fHelper.usesLocalCoords() ? LocalCoords::kUsePosition_Type
+                                                          : LocalCoords::kUnused_Type);
+        localCoords.fMatrix = geometryProcessorLocalM;
+
+        lineGP = GrDefaultGeoProcFactory::Make(arena,
+                                               color,
+                                               Coverage::kAttribute_Type,
+                                               localCoords,
+                                               *geometryProcessorViewM);
+        SkASSERT(sizeof(LineVertex) == lineGP->vertexStride());
+    }
+
+    fProgramInfos[0] = GrSimpleMeshDrawOpHelper::CreateProgramInfo(
+            arena, pipeline, writeView, lineGP, GrPrimitiveType::kTriangles,
+            renderPassXferBarriers, colorLoadOp, fHelper.stencilSettings());
+}
+
+void AAHairlineOp::makeQuadProgramInfo(const GrCaps& caps, SkArenaAlloc* arena,
+                                       const GrPipeline* pipeline,
+                                       const GrSurfaceProxyView& writeView,
+                                       const SkMatrix* geometryProcessorViewM,
+                                       const SkMatrix* geometryProcessorLocalM,
+                                       GrXferBarrierFlags renderPassXferBarriers,
+                                       GrLoadOp colorLoadOp) {
+    if (fProgramInfos[1]) {
+        return;
+    }
+
+    GrGeometryProcessor* quadGP = GrQuadEffect::Make(arena,
+                                                     this->color(),
+                                                     *geometryProcessorViewM,
+                                                     caps,
+                                                     *geometryProcessorLocalM,
+                                                     fHelper.usesLocalCoords(),
+                                                     this->coverage());
+    SkASSERT(sizeof(BezierVertex) == quadGP->vertexStride());
+
+    fProgramInfos[1] = GrSimpleMeshDrawOpHelper::CreateProgramInfo(
+            arena, pipeline, writeView, quadGP, GrPrimitiveType::kTriangles,
+            renderPassXferBarriers, colorLoadOp, fHelper.stencilSettings());
+}
+
+void AAHairlineOp::makeConicProgramInfo(const GrCaps& caps, SkArenaAlloc* arena,
+                                        const GrPipeline* pipeline,
+                                        const GrSurfaceProxyView& writeView,
+                                        const SkMatrix* geometryProcessorViewM,
+                                        const SkMatrix* geometryProcessorLocalM,
+                                        GrXferBarrierFlags renderPassXferBarriers,
+                                        GrLoadOp colorLoadOp) {
+    if (fProgramInfos[2]) {
+        return;
+    }
+
+    GrGeometryProcessor* conicGP = GrConicEffect::Make(arena,
+                                                       this->color(),
+                                                       *geometryProcessorViewM,
+                                                       caps,
+                                                       *geometryProcessorLocalM,
+                                                       fHelper.usesLocalCoords(),
+                                                       this->coverage());
+    SkASSERT(sizeof(BezierVertex) == conicGP->vertexStride());
+
+    fProgramInfos[2] = GrSimpleMeshDrawOpHelper::CreateProgramInfo(
+            arena, pipeline, writeView, conicGP, GrPrimitiveType::kTriangles,
+            renderPassXferBarriers, colorLoadOp, fHelper.stencilSettings());
+}
+
+AAHairlineOp::Program AAHairlineOp::predictPrograms(const GrCaps* caps) const {
+    bool convertConicsToQuads = !caps->shaderCaps()->floatIs32Bits();
+
+    // When predicting the programs we always include the lineProgram bc it is used as a fallback
+    // for quads and conics. In non-DDL mode there are cases where it sometimes isn't needed for a
+    // given path.
+    Program neededPrograms = kLine_Program;
+
+    for (int i = 0; i < fPaths.count(); i++) {
+        uint32_t mask = fPaths[i].fPath.getSegmentMasks();
+
+        if (mask & (SkPath::kQuad_SegmentMask | SkPath::kCubic_SegmentMask)) {
+            neededPrograms |= kQuad_Program;
+        }
+        if (mask & SkPath::kConic_SegmentMask) {
+            if (convertConicsToQuads) {
+                neededPrograms |= kQuad_Program;
+            } else {
+                neededPrograms |= kConic_Program;
+            }
+        }
+    }
+
+    return neededPrograms;
+}
+
+void AAHairlineOp::onCreateProgramInfo(const GrCaps* caps,
+                                       SkArenaAlloc* arena,
+                                       const GrSurfaceProxyView& writeView,
+                                       GrAppliedClip&& appliedClip,
+                                       const GrXferProcessor::DstProxyView& dstProxyView,
+                                       GrXferBarrierFlags renderPassXferBarriers,
+                                       GrLoadOp colorLoadOp) {
     // Setup the viewmatrix and localmatrix for the GrGeometryProcessor.
     SkMatrix invert;
     if (!this->viewMatrix().invert(&invert)) {
@@ -920,14 +1121,72 @@ void AAHairlineOp::onPrepareDraws(Target* target) {
     bool hasPerspective = this->viewMatrix().hasPerspective();
     const SkMatrix* geometryProcessorViewM = &SkMatrix::I();
     const SkMatrix* geometryProcessorLocalM = &invert;
-    const SkMatrix* toDevice = nullptr;
-    const SkMatrix* toSrc = nullptr;
     if (hasPerspective) {
         geometryProcessorViewM = &this->viewMatrix();
         geometryProcessorLocalM = &SkMatrix::I();
+    }
+
+    auto pipeline = fHelper.createPipeline(caps, arena, writeView.swizzle(),
+                                           std::move(appliedClip), dstProxyView);
+
+    if (fCharacterization & kLine_Program) {
+        this->makeLineProgramInfo(*caps, arena, pipeline, writeView,
+                                  geometryProcessorViewM, geometryProcessorLocalM,
+                                  renderPassXferBarriers, colorLoadOp);
+    }
+    if (fCharacterization & kQuad_Program) {
+        this->makeQuadProgramInfo(*caps, arena, pipeline, writeView,
+                                  geometryProcessorViewM, geometryProcessorLocalM,
+                                  renderPassXferBarriers, colorLoadOp);
+    }
+    if (fCharacterization & kConic_Program) {
+        this->makeConicProgramInfo(*caps, arena, pipeline, writeView,
+                                   geometryProcessorViewM, geometryProcessorLocalM,
+                                   renderPassXferBarriers, colorLoadOp);
+
+    }
+}
+
+void AAHairlineOp::onPrePrepareDraws(GrRecordingContext* context,
+                                     const GrSurfaceProxyView& writeView,
+                                     GrAppliedClip* clip,
+                                     const GrXferProcessor::DstProxyView& dstProxyView,
+                                     GrXferBarrierFlags renderPassXferBarriers,
+                                     GrLoadOp colorLoadOp) {
+    SkArenaAlloc* arena = context->priv().recordTimeAllocator();
+    const GrCaps* caps = context->priv().caps();
+
+    // This is equivalent to a GrOpFlushState::detachAppliedClip
+    GrAppliedClip appliedClip = clip ? std::move(*clip) : GrAppliedClip::Disabled();
+
+    // Conservatively predict which programs will be required
+    fCharacterization = this->predictPrograms(caps);
+
+    this->createProgramInfo(caps, arena, writeView, std::move(appliedClip), dstProxyView,
+                            renderPassXferBarriers, colorLoadOp);
+
+    context->priv().recordProgramInfo(fProgramInfos[0]);
+    context->priv().recordProgramInfo(fProgramInfos[1]);
+    context->priv().recordProgramInfo(fProgramInfos[2]);
+}
+
+void AAHairlineOp::onPrepareDraws(Target* target) {
+    // Setup the viewmatrix and localmatrix for the GrGeometryProcessor.
+    SkMatrix invert;
+    if (!this->viewMatrix().invert(&invert)) {
+        return;
+    }
+
+    // we will transform to identity space if the viewmatrix does not have perspective
+    const SkMatrix* toDevice = nullptr;
+    const SkMatrix* toSrc = nullptr;
+    if (this->viewMatrix().hasPerspective()) {
         toDevice = &this->viewMatrix();
         toSrc = &invert;
     }
+
+    SkDEBUGCODE(Program predictedPrograms = this->predictPrograms(&target->caps()));
+    Program actualPrograms = kNone_Program;
 
     // This is hand inlined for maximum performance.
     PREALLOC_PTARRAY(128) lines;
@@ -958,30 +1217,17 @@ void AAHairlineOp::onPrepareDraws(Target* target) {
 
     // do lines first
     if (lineCount) {
-        sk_sp<GrGeometryProcessor> lineGP;
-        {
-            using namespace GrDefaultGeoProcFactory;
-
-            Color color(this->color());
-            LocalCoords localCoords(fHelper.usesLocalCoords() ? LocalCoords::kUsePosition_Type
-                                                              : LocalCoords::kUnused_Type);
-            localCoords.fMatrix = geometryProcessorLocalM;
-            lineGP = GrDefaultGeoProcFactory::Make(target->caps().shaderCaps(),
-                                                   color, Coverage::kAttribute_Type, localCoords,
-                                                   *geometryProcessorViewM);
-        }
+        SkASSERT(predictedPrograms & kLine_Program);
+        actualPrograms |= kLine_Program;
 
         sk_sp<const GrBuffer> linesIndexBuffer = get_lines_index_buffer(target->resourceProvider());
 
-        sk_sp<const GrBuffer> vertexBuffer;
-        int firstVertex;
+        GrMeshDrawOp::PatternHelper helper(target, GrPrimitiveType::kTriangles, sizeof(LineVertex),
+                                           std::move(linesIndexBuffer), kLineSegNumVertices,
+                                           kIdxsPerLineSeg, lineCount, kLineSegsNumInIdxBuffer);
 
-        SkASSERT(sizeof(LineVertex) == lineGP->vertexStride());
-        int vertexCount = kLineSegNumVertices * lineCount;
-        LineVertex* verts = reinterpret_cast<LineVertex*>(target->makeVertexSpace(
-                sizeof(LineVertex), vertexCount, &vertexBuffer, &firstVertex));
-
-        if (!verts|| !linesIndexBuffer) {
+        LineVertex* verts = reinterpret_cast<LineVertex*>(helper.vertices());
+        if (!verts) {
             SkDebugf("Could not allocate vertices\n");
             return;
         }
@@ -990,37 +1236,15 @@ void AAHairlineOp::onPrepareDraws(Target* target) {
             add_line(&lines[2*i], toSrc, this->coverage(), &verts);
         }
 
-        GrMesh* mesh = target->allocMesh(GrPrimitiveType::kTriangles);
-        mesh->setIndexedPatterned(std::move(linesIndexBuffer), kIdxsPerLineSeg, kLineSegNumVertices,
-                                  lineCount, kLineSegsNumInIdxBuffer);
-        mesh->setVertexData(std::move(vertexBuffer), firstVertex);
-        target->recordDraw(std::move(lineGP), mesh);
+        fMeshes[0] = helper.mesh();
     }
 
     if (quadCount || conicCount) {
-        sk_sp<GrGeometryProcessor> quadGP(GrQuadEffect::Make(this->color(),
-                                                             *geometryProcessorViewM,
-                                                             GrClipEdgeType::kHairlineAA,
-                                                             target->caps(),
-                                                             *geometryProcessorLocalM,
-                                                             fHelper.usesLocalCoords(),
-                                                             this->coverage()));
-
-        sk_sp<GrGeometryProcessor> conicGP(GrConicEffect::Make(this->color(),
-                                                               *geometryProcessorViewM,
-                                                               GrClipEdgeType::kHairlineAA,
-                                                               target->caps(),
-                                                               *geometryProcessorLocalM,
-                                                               fHelper.usesLocalCoords(),
-                                                               this->coverage()));
-
         sk_sp<const GrBuffer> vertexBuffer;
         int firstVertex;
 
         sk_sp<const GrBuffer> quadsIndexBuffer = get_quads_index_buffer(target->resourceProvider());
 
-        SkASSERT(sizeof(BezierVertex) == quadGP->vertexStride());
-        SkASSERT(sizeof(BezierVertex) == conicGP->vertexStride());
         int vertexCount = kQuadNumVertices * quadAndConicCount;
         void* vertices = target->makeVertexSpace(sizeof(BezierVertex), vertexCount, &vertexBuffer,
                                                  &firstVertex);
@@ -1045,43 +1269,57 @@ void AAHairlineOp::onPrepareDraws(Target* target) {
         }
 
         if (quadCount > 0) {
-            GrMesh* mesh = target->allocMesh(GrPrimitiveType::kTriangles);
-            mesh->setIndexedPatterned(quadsIndexBuffer, kIdxsPerQuad, kQuadNumVertices, quadCount,
-                                      kQuadsNumInIdxBuffer);
-            mesh->setVertexData(vertexBuffer, firstVertex);
-            target->recordDraw(std::move(quadGP), mesh);
+            SkASSERT(predictedPrograms & kQuad_Program);
+            actualPrograms |= kQuad_Program;
+
+            fMeshes[1] = target->allocMesh();
+            fMeshes[1]->setIndexedPatterned(quadsIndexBuffer, kIdxsPerQuad, quadCount,
+                                            kQuadsNumInIdxBuffer, vertexBuffer, kQuadNumVertices,
+                                            firstVertex);
             firstVertex += quadCount * kQuadNumVertices;
         }
 
         if (conicCount > 0) {
-            GrMesh* mesh = target->allocMesh(GrPrimitiveType::kTriangles);
-            mesh->setIndexedPatterned(std::move(quadsIndexBuffer), kIdxsPerQuad, kQuadNumVertices,
-                                      conicCount, kQuadsNumInIdxBuffer);
-            mesh->setVertexData(std::move(vertexBuffer), firstVertex);
-            target->recordDraw(std::move(conicGP), mesh);
+            SkASSERT(predictedPrograms & kConic_Program);
+            actualPrograms |= kConic_Program;
+
+            fMeshes[2] = target->allocMesh();
+            fMeshes[2]->setIndexedPatterned(std::move(quadsIndexBuffer), kIdxsPerQuad, conicCount,
+                                            kQuadsNumInIdxBuffer, std::move(vertexBuffer),
+                                            kQuadNumVertices, firstVertex);
         }
     }
+
+    // In DDL mode this will replace the predicted program requirements with the actual ones.
+    // However, we will already have surfaced the predicted programs to the DDL.
+    fCharacterization = actualPrograms;
 }
 
 void AAHairlineOp::onExecute(GrOpFlushState* flushState, const SkRect& chainBounds) {
-    fHelper.executeDrawsAndUploads(this, flushState, chainBounds);
+    this->createProgramInfo(flushState);
+
+    for (int i = 0; i < 3; ++i) {
+        if (fProgramInfos[i] && fMeshes[i]) {
+            flushState->bindPipelineAndScissorClip(*fProgramInfos[i], chainBounds);
+            flushState->bindTextures(fProgramInfos[i]->primProc(), nullptr,
+                                     fProgramInfos[i]->pipeline());
+            flushState->drawMesh(*fMeshes[i]);
+        }
+    }
 }
 
 bool GrAAHairLinePathRenderer::onDrawPath(const DrawPathArgs& args) {
     GR_AUDIT_TRAIL_AUTO_FRAME(args.fRenderTargetContext->auditTrail(),
                               "GrAAHairlinePathRenderer::onDrawPath");
-    SkASSERT(GrFSAAType::kUnifiedMSAA != args.fRenderTargetContext->fsaaType());
+    SkASSERT(args.fRenderTargetContext->numSamples() <= 1);
 
-    SkIRect devClipBounds;
-    args.fClip->getConservativeBounds(args.fRenderTargetContext->width(),
-                                      args.fRenderTargetContext->height(),
-                                      &devClipBounds);
     SkPath path;
     args.fShape->asPath(&path);
-    std::unique_ptr<GrDrawOp> op =
+    GrOp::Owner op =
             AAHairlineOp::Make(args.fContext, std::move(args.fPaint), *args.fViewMatrix, path,
-                               args.fShape->style(), devClipBounds, args.fUserStencilSettings);
-    args.fRenderTargetContext->addDrawOp(*args.fClip, std::move(op));
+                               args.fShape->style(), *args.fClipConservativeBounds,
+                               args.fUserStencilSettings);
+    args.fRenderTargetContext->addDrawOp(args.fClip, std::move(op));
     return true;
 }
 
@@ -1091,7 +1329,7 @@ bool GrAAHairLinePathRenderer::onDrawPath(const DrawPathArgs& args) {
 
 GR_DRAW_OP_TEST_DEFINE(AAHairlineOp) {
     SkMatrix viewMatrix = GrTest::TestMatrix(random);
-    SkPath path = GrTest::TestPath(random);
+    const SkPath& path = GrTest::TestPath(random);
     SkIRect devClipBounds;
     devClipBounds.setEmpty();
     return AAHairlineOp::Make(context, std::move(paint), viewMatrix, path,

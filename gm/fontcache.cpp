@@ -8,23 +8,31 @@
 // GM to stress the GPU font cache
 // It's not necessary to run this with CPU configs
 
-#include "gm.h"
+#include "gm/gm.h"
+#include "include/core/SkCanvas.h"
+#include "include/core/SkColor.h"
+#include "include/core/SkFont.h"
+#include "include/core/SkFontStyle.h"
+#include "include/core/SkFontTypes.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkRefCnt.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkSize.h"
+#include "include/core/SkString.h"
+#include "include/core/SkTypeface.h"
+#include "include/gpu/GrContextOptions.h"
+#include "include/gpu/GrDirectContext.h"
+#include "include/private/GrTypesPriv.h"
+#include "src/gpu/GrDirectContextPriv.h"
+#include "tools/ToolUtils.h"
 
-#include "GrContext.h"
-#include "GrContextPriv.h"
-#include "GrContextOptions.h"
-#include "SkCanvas.h"
-#include "SkGraphics.h"
-#include "SkImage.h"
-#include "SkTypeface.h"
-#include "gm.h"
-#include "sk_tool_utils.h"
+class GrRenderTargetContext;
 
 static SkScalar draw_string(SkCanvas* canvas, const SkString& text, SkScalar x,
                            SkScalar y, const SkFont& font) {
     SkPaint paint;
     canvas->drawString(text, x, y, font, paint);
-    return x + font.measureText(text.c_str(), text.size(), kUTF8_SkTextEncoding);
+    return x + font.measureText(text.c_str(), text.size(), SkTextEncoding::kUTF8);
 }
 
 class FontCacheGM : public skiagm::GpuGM {
@@ -51,22 +59,21 @@ protected:
     SkISize onISize() override { return SkISize::Make(kSize, kSize); }
 
     void onOnceBeforeDraw() override {
-        fTypefaces[0] = sk_tool_utils::create_portable_typeface("serif", SkFontStyle::Italic());
-        fTypefaces[1] = sk_tool_utils::create_portable_typeface("sans-serif",SkFontStyle::Italic());
-        fTypefaces[2] = sk_tool_utils::create_portable_typeface("serif", SkFontStyle::Normal());
-        fTypefaces[3] =
-                sk_tool_utils::create_portable_typeface("sans-serif", SkFontStyle::Normal());
-        fTypefaces[4] = sk_tool_utils::create_portable_typeface("serif", SkFontStyle::Bold());
-        fTypefaces[5] = sk_tool_utils::create_portable_typeface("sans-serif", SkFontStyle::Bold());
+        fTypefaces[0] = ToolUtils::create_portable_typeface("serif", SkFontStyle::Italic());
+        fTypefaces[1] = ToolUtils::create_portable_typeface("sans-serif", SkFontStyle::Italic());
+        fTypefaces[2] = ToolUtils::create_portable_typeface("serif", SkFontStyle::Normal());
+        fTypefaces[3] = ToolUtils::create_portable_typeface("sans-serif", SkFontStyle::Normal());
+        fTypefaces[4] = ToolUtils::create_portable_typeface("serif", SkFontStyle::Bold());
+        fTypefaces[5] = ToolUtils::create_portable_typeface("sans-serif", SkFontStyle::Bold());
     }
 
-    void onDraw(GrContext*, GrRenderTargetContext*, SkCanvas* canvas) override {
+    void onDraw(GrRecordingContext*, GrRenderTargetContext*, SkCanvas* canvas) override {
         this->drawText(canvas);
         //  Debugging tool for GPU.
         static const bool kShowAtlas = false;
         if (kShowAtlas) {
-            if (auto ctx = canvas->getGrContext()) {
-                auto img = ctx->priv().testingOnly_getFontAtlasImage(kA8_GrMaskFormat);
+            if (auto direct = GrAsDirectContext(canvas->recordingContext())) {
+                auto img = direct->priv().testingOnly_getFontAtlasImage(kA8_GrMaskFormat);
                 canvas->drawImage(img, 0, 0);
             }
         }
@@ -123,7 +130,7 @@ private:
 
     GrContextOptions::Enable fAllowMultipleTextures;
     sk_sp<SkTypeface> fTypefaces[6];
-    typedef GM INHERITED;
+    using INHERITED = GM;
 };
 
 constexpr SkScalar FontCacheGM::kSize;

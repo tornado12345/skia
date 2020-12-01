@@ -5,8 +5,10 @@
  * found in the LICENSE file.
  */
 
-#include "Benchmark.h"
-#include "SkPolyUtils.h"
+#include "bench/Benchmark.h"
+#include "include/core/SkRect.h"
+#include "include/private/SkTemplates.h"
+#include "src/utils/SkPolyUtils.h"
 
 class PolyUtilsBench : public Benchmark {
 public:
@@ -70,9 +72,13 @@ protected:
             case Type::kOffsetSimple:
                 if (SkIsSimplePolygon(poly.begin(), poly.count())) {
                     SkTDArray<SkPoint> result;
+                    SkRect bounds;
+                    bounds.setBounds(poly.begin(), poly.count());
                     for (int i = 0; i < loops; i++) {
-                        (void)SkOffsetSimplePolygon(poly.begin(), poly.count(), 10, &result);
-                        (void)SkOffsetSimplePolygon(poly.begin(), poly.count(), -10, &result);
+                        (void)SkOffsetSimplePolygon(poly.begin(), poly.count(), bounds, 10,
+                                                    &result);
+                        (void)SkOffsetSimplePolygon(poly.begin(), poly.count(), bounds, -10,
+                                                    &result);
                     }
                 }
                 break;
@@ -96,7 +102,7 @@ private:
     SkString           fName;
     Type               fType;
 
-    typedef Benchmark INHERITED;
+    using INHERITED = Benchmark;
 };
 
 class StarPolyUtilsBench : public PolyUtilsBench {
@@ -115,16 +121,14 @@ public:
         SkScalar rad = 0;
         const SkScalar drad = SK_ScalarPI / n;
         for (int i = 0; i < n; i++) {
-            SkScalar cosV, sinV = SkScalarSinCos(rad, &cosV);
-            *poly->push() = SkPoint::Make(c + cosV * r1, c + sinV * r1);
+            *poly->push() = SkPoint::Make(c + SkScalarCos(rad) * r1, c + SkScalarSin(rad) * r1);
             rad += drad;
-            sinV = SkScalarSinCos(rad, &cosV);
-            *poly->push() = SkPoint::Make(c + cosV * r2, c + sinV * r2);
+            *poly->push() = SkPoint::Make(c + SkScalarCos(rad) * r2, c + SkScalarSin(rad) * r2);
             rad += drad;
         }
     }
 private:
-    typedef PolyUtilsBench INHERITED;
+    using INHERITED = PolyUtilsBench;
 };
 
 class CirclePolyUtilsBench : public PolyUtilsBench {
@@ -142,13 +146,12 @@ public:
         SkScalar rad = 0;
         const SkScalar drad = 2 * SK_ScalarPI / n;
         for (int i = 0; i < n; i++) {
-            SkScalar cosV, sinV = SkScalarSinCos(rad, &cosV);
-            *poly->push() = SkPoint::Make(c + cosV * r, c + sinV * r);
+            *poly->push() = SkPoint::Make(c + SkScalarCos(rad) * r, c + SkScalarSin(rad) * r);
             rad += drad;
         }
     }
 private:
-    typedef PolyUtilsBench INHERITED;
+    using INHERITED = PolyUtilsBench;
 };
 
 class IntersectingPolyUtilsBench : public PolyUtilsBench {
@@ -169,12 +172,11 @@ public:
         *poly->push() = SkPoint::Make(c, c - r);
         for (int i = 1; i < n; i++) {
             rad += drad;
-            SkScalar cosV, sinV = SkScalarSinCos(rad, &cosV);
-            *poly->push() = SkPoint::Make(c + cosV * r, c + sinV * r);
+            *poly->push() = SkPoint::Make(c + SkScalarCos(rad) * r, c + SkScalarSin(rad) * r);
         }
     }
 private:
-    typedef PolyUtilsBench INHERITED;
+    using INHERITED = PolyUtilsBench;
 };
 
 // familiar videogame character
@@ -193,15 +195,14 @@ public:
         SkScalar rad = 0;
         const SkScalar drad = 3 * SK_ScalarPI / (2*n);
         for (int i = 0; i < n; i++) {
-            SkScalar cosV, sinV = SkScalarSinCos(rad, &cosV);
-            *poly->push() = SkPoint::Make(c + cosV * r, c + sinV * r);
+            *poly->push() = SkPoint::Make(c + SkScalarCos(rad) * r, c + SkScalarSin(rad) * r);
             rad += drad;
         }
         // and the mouth
         *poly->push() = SkPoint::Make(45, 45);
     }
 private:
-    typedef PolyUtilsBench INHERITED;
+    using INHERITED = PolyUtilsBench;
 };
 
 class IceCreamPolyUtilsBench : public PolyUtilsBench {
@@ -219,15 +220,14 @@ public:
         SkScalar rad = 0;
         const SkScalar drad = 3 * SK_ScalarPI / (2*n);
         for (int i = 0; i < n; i++) {
-            SkScalar cosV, sinV = SkScalarSinCos(rad, &cosV);
-            *poly->push() = SkPoint::Make(c + cosV * r, c + sinV * r);
+            *poly->push() = SkPoint::Make(c + SkScalarCos(rad) * r, c + SkScalarSin(rad) * r);
             rad += drad;
         }
         // and the tip of the cone
         *poly->push() = SkPoint::Make(90, 0);
     }
 private:
-    typedef PolyUtilsBench INHERITED;
+    using INHERITED = PolyUtilsBench;
 };
 
 DEF_BENCH(return new StarPolyUtilsBench(PolyUtilsBench::Type::kConvexCheck);)

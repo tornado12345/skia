@@ -5,8 +5,8 @@
  * found in the LICENSE file.
  */
 
-#include "SkMessageBus.h"
-#include "Test.h"
+#include "src/core/SkMessageBus.h"
+#include "tests/Test.h"
 
 namespace {
 
@@ -21,7 +21,7 @@ static inline bool SkShouldPostMessageToBus(const TestMessage&, uint32_t) {
     return true;
 }
 
-}
+}  // namespace
 DECLARE_SKMESSAGEBUS_MESSAGE(TestMessage)
 
 DEF_TEST(MessageBus, r) {
@@ -74,7 +74,7 @@ static inline bool SkShouldPostMessageToBus(const AddressedMessage& msg, uint32_
     return msgBusUniqueID == msg.fInboxID;
 }
 
-}
+}  // namespace
 
 DECLARE_SKMESSAGEBUS_MESSAGE(AddressedMessage)
 

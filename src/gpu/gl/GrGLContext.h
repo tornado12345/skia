@@ -9,16 +9,13 @@
 #ifndef GrGLContext_DEFINED
 #define GrGLContext_DEFINED
 
-#include "GrGLCaps.h"
-#include "GrGLUtil.h"
-#include "gl/GrGLExtensions.h"
-#include "gl/GrGLInterface.h"
-#include "glsl/GrGLSL.h"
+#include "include/gpu/gl/GrGLExtensions.h"
+#include "include/gpu/gl/GrGLInterface.h"
+#include "src/gpu/gl/GrGLCaps.h"
+#include "src/gpu/gl/GrGLUtil.h"
+#include "src/gpu/glsl/GrGLSL.h"
 
 struct GrContextOptions;
-namespace SkSL {
-    class Compiler;
-}
 
 /**
  * Encapsulates information about an OpenGL context including the OpenGL
@@ -82,7 +79,7 @@ protected:
 };
 
 /**
- * Extension of GrGLContextInfo that also provides access to GrGLInterface and SkSL::Compiler.
+ * Extension of GrGLContextInfo that also provides access to GrGLInterface.
  */
 class GrGLContext : public GrGLContextInfo {
 public:
@@ -92,18 +89,14 @@ public:
      */
     static std::unique_ptr<GrGLContext> Make(sk_sp<const GrGLInterface>, const GrContextOptions&);
 
-    const GrGLInterface* interface() const { return fInterface.get(); }
-
-    SkSL::Compiler* compiler() const;
+    const GrGLInterface* glInterface() const { return fInterface.get(); }
 
     ~GrGLContext() override;
 
 private:
-    GrGLContext(ConstructorArgs&& args) : INHERITED(std::move(args)), fCompiler(nullptr) {}
+    GrGLContext(ConstructorArgs&& args) : INHERITED(std::move(args)) {}
 
-    mutable SkSL::Compiler* fCompiler;
-
-    typedef GrGLContextInfo INHERITED;
+    using INHERITED = GrGLContextInfo;
 };
 
 #endif
